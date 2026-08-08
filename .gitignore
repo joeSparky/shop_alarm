@@ -1,0 +1,25 @@
+# Virtual environment
+.venv/
+
+# pytest
+.pytest_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VS Code
+.vscode/
+
+# Local secrets
+.env
+.env.*
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Coverage reports
+.coverage
+htmlcov/

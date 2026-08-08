@@ -7,6 +7,7 @@ ALARM_STATE = "input_select.shop_alarm_state"
 ALARM_TRIGGERED = "input_boolean.shop_alarm_triggered"
 TEST_DOOR = "input_boolean.shop_alarm_test_door_open"
 TEST_MODE = "input_boolean.shop_alarm_test_mode"
+NOTIFY_ACTION = "input_text.shop_alarm_notify_action"
 
 
 def set_mode(ha: HomeAssistantClient, mode: str) -> None:
@@ -80,14 +81,38 @@ def test_shop_alarm_triggered_entity_exists():
         assert ha.state(ALARM_TRIGGERED) in ("on", "off")
 
 
+def test_shop_alarm_notify_action_entity_exists():
+    with HomeAssistantClient() as ha:
+        assert isinstance(ha.state(NOTIFY_ACTION), str)
+
+
+def test_mobile_app_notify_action_is_configured():
+    with HomeAssistantClient() as ha:
+        candidates = ha.service_names("notify", prefix="mobile_app_")
+        assert len(candidates) == 1, (
+            "Expected exactly one Home Assistant mobile-app notify action; "
+            f"found {candidates!r}."
+        )
+        action = f"notify.{candidates[0]}"
+        ha.call_service(
+            "input_text",
+            "set_value",
+            {"entity_id": NOTIFY_ACTION, "value": action},
+        )
+        ha.wait_for_state(NOTIFY_ACTION, action, timeout=2)
+        assert ha.state(NOTIFY_ACTION) == action
+
+
 def test_shop_alarm_can_select_all_modes():
     with HomeAssistantClient() as ha:
+        set_boolean(ha, TEST_MODE, True)
         try:
             for mode in ("Home", "Away", "Sleep", "Disarmed"):
                 set_mode(ha, mode)
                 assert ha.state(ALARM_MODE) == mode
         finally:
             set_mode(ha, "Disarmed")
+            set_boolean(ha, TEST_MODE, False)
 
 
 def test_home_mode_ignores_virtual_door():

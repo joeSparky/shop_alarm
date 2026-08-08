@@ -3,15 +3,28 @@
 # Deployment target on Home Assistant OS:
 #   /config/packages/shop_alarm.yaml
 #
+# Alarm modes:
+#   Disarmed - no door alarm
+#   Home     - user is at the shop; front-door openings are ignored
+#   Away     - front door is protected
+#   Sleep    - front door is protected
+#
 # The alarm can be triggered by either the real front door or a dedicated
 # test helper. The test helper lets pytest exercise the same alarm logic
 # without anyone physically opening the shop door.
 
-input_boolean:
-  shop_alarm_armed:
-    name: Shop Alarm Armed
-    icon: mdi:shield-lock
+input_select:
+  shop_alarm_mode:
+    name: Shop Alarm Mode
+    options:
+      - Disarmed
+      - Home
+      - Away
+      - Sleep
+    initial: Disarmed
+    icon: mdi:shield-home
 
+input_boolean:
   shop_alarm_triggered:
     name: Shop Alarm Triggered
     initial: false
@@ -23,9 +36,9 @@ input_boolean:
     icon: mdi:door-open
 
 automation:
-  - id: shop_alarm_front_door_trigger
+  - id: shop_alarm_door_trigger
     alias: "Shop Alarm - Door Trigger"
-    description: "Trigger the shop alarm when the real or test door opens while armed."
+    description: "Trigger the shop alarm when the real or test door opens in Away or Sleep mode."
     triggers:
       - trigger: state
         entity_id: binary_sensor.shop_front_door_opening
@@ -34,9 +47,9 @@ automation:
         entity_id: input_boolean.shop_alarm_test_door_open
         to: "on"
     conditions:
-      - condition: state
-        entity_id: input_boolean.shop_alarm_armed
-        state: "on"
+      - condition: template
+        value_template: >-
+          {{ states('input_select.shop_alarm_mode') in ['Away', 'Sleep'] }}
     actions:
       - action: input_boolean.turn_on
         target:
@@ -45,11 +58,11 @@ automation:
 
   - id: shop_alarm_disarm_clears_trigger
     alias: "Shop Alarm - Disarm Clears Trigger"
-    description: "Clear an active alarm whenever the shop alarm is disarmed."
+    description: "Clear an active alarm whenever the shop alarm is set to Disarmed."
     triggers:
       - trigger: state
-        entity_id: input_boolean.shop_alarm_armed
-        to: "off"
+        entity_id: input_select.shop_alarm_mode
+        to: "Disarmed"
     actions:
       - action: input_boolean.turn_off
         target:

@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Any
 
 import requests
@@ -57,6 +58,35 @@ class HomeAssistantClient:
     def state(self, entity_id: str) -> str:
         """Return only an entity's state string."""
         return self.get_state(entity_id)["state"]
+
+    def wait_for_state(
+        self,
+        entity_id: str,
+        expected_state: str,
+        timeout: float = 30.0,
+        poll_interval: float = 0.25,
+    ) -> dict[str, Any]:
+        """Wait until an entity reaches expected_state, then return its state object.
+
+        Raises TimeoutError if the requested state is not observed before timeout.
+        """
+        deadline = time.monotonic() + timeout
+        last_state: str | None = None
+
+        while True:
+            state_object = self.get_state(entity_id)
+            last_state = state_object["state"]
+
+            if last_state == expected_state:
+                return state_object
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out after {timeout:g}s waiting for {entity_id} "
+                    f"to become {expected_state!r}; last state was {last_state!r}."
+                )
+
+            time.sleep(poll_interval)
 
     def call_service(
         self,

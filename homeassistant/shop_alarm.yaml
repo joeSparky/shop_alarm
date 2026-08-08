@@ -1,0 +1,51 @@
+# Shop alarm package - first working Home Assistant-side version
+#
+# Deployment target on Home Assistant OS:
+#   /config/packages/shop_alarm.yaml
+#
+# This package deliberately starts small:
+#   1. input_boolean.shop_alarm_armed controls whether the door is protected.
+#   2. Opening the real shop front door while armed sets
+#      input_boolean.shop_alarm_triggered to ON.
+#   3. Disarming clears the triggered state.
+
+input_boolean:
+  shop_alarm_armed:
+    name: Shop Alarm Armed
+    icon: mdi:shield-lock
+
+  shop_alarm_triggered:
+    name: Shop Alarm Triggered
+    initial: false
+    icon: mdi:alarm-light
+
+automation:
+  - id: shop_alarm_front_door_trigger
+    alias: "Shop Alarm - Front Door Trigger"
+    description: "Trigger the shop alarm when the front door opens while armed."
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.shop_front_door_opening
+        to: "on"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.shop_alarm_armed
+        state: "on"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.shop_alarm_triggered
+    mode: single
+
+  - id: shop_alarm_disarm_clears_trigger
+    alias: "Shop Alarm - Disarm Clears Trigger"
+    description: "Clear an active alarm whenever the shop alarm is disarmed."
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.shop_alarm_armed
+        to: "off"
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.shop_alarm_triggered
+    mode: single

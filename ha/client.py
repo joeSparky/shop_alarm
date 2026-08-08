@@ -88,6 +88,18 @@ class HomeAssistantClient:
 
             time.sleep(poll_interval)
 
+    def services(self) -> list[dict[str, Any]]:
+        """Return Home Assistant's available action/service registry."""
+        return self._request("GET", "/api/services")
+
+    def service_names(self, domain: str, prefix: str = "") -> list[str]:
+        """Return sorted service names in a domain, optionally filtered by prefix."""
+        for item in self.services():
+            if item.get("domain") == domain:
+                names = item.get("services", {}).keys()
+                return sorted(name for name in names if name.startswith(prefix))
+        return []
+
     def call_service(
         self,
         domain: str,

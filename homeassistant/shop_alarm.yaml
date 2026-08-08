@@ -12,7 +12,8 @@
 # Alarm state tracks the Ring-style progression:
 #   Disarmed -> Exit Delay -> Armed Away -> Entry Delay -> Alarm
 #
-# Pytest can enable test mode to shorten delays to one second.
+# Pytest can enable test mode to shorten delays to one second. Test mode
+# also suppresses phone notifications so automated tests do not make noise.
 
 input_select:
   shop_alarm_mode:
@@ -53,6 +54,38 @@ input_boolean:
     name: Shop Alarm Test Mode
     initial: false
     icon: mdi:test-tube
+
+input_text:
+  shop_alarm_notify_action:
+    name: Shop Alarm Notify Action
+    max: 255
+    icon: mdi:cellphone-message
+
+script:
+  shop_alarm_send_notification:
+    alias: "Shop Alarm - Send Notification"
+    description: "Send an audible mobile-app notification when a phone notify action is configured."
+    fields:
+      title:
+        description: "Notification title"
+      message:
+        description: "Notification message"
+    sequence:
+      - condition: state
+        entity_id: input_boolean.shop_alarm_test_mode
+        state: "off"
+      - condition: template
+        value_template: >-
+          {{ states('input_text.shop_alarm_notify_action').startswith('notify.mobile_app_') }}
+      - action: "{{ states('input_text.shop_alarm_notify_action') }}"
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+          data:
+            push:
+              sound: default
+    mode: parallel
+    max: 10
 
 automation:
   - id: shop_alarm_mode_disarmed
@@ -121,6 +154,10 @@ automation:
           entity_id: input_select.shop_alarm_state
         data:
           option: Exit Delay
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "Shop alarm"
+          message: "Away selected. Exit delay started."
       - delay:
           seconds: >-
             {{ 1 if is_state('input_boolean.shop_alarm_test_mode', 'on') else 30 }}
@@ -154,6 +191,10 @@ automation:
           entity_id: input_select.shop_alarm_state
         data:
           option: Entry Delay
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "Shop alarm entry delay"
+          message: "Protected door opened. Disarm the shop alarm."
       - delay:
           seconds: >-
             {{ 1 if is_state('input_boolean.shop_alarm_test_mode', 'on') else 30 }}
@@ -171,4 +212,8 @@ automation:
           entity_id: input_select.shop_alarm_state
         data:
           option: Alarm
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "SHOP ALARM"
+          message: "Alarm triggered at the shop."
     mode: restart

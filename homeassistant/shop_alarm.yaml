@@ -12,6 +12,11 @@
 # Alarm state tracks the Ring-style progression:
 #   Disarmed -> Exit Delay -> Armed Away -> Entry Delay -> Alarm
 #
+# Away arming fault handling:
+#   If the protected front door is open when Away is selected, the alarm
+#   enters Fault and waits. Closing the door starts the exit delay.
+#   "Shop Alarm - Arm Away Anyway" provides a one-cycle override.
+#
 # Pytest can enable test mode to shorten delays to one second. Test mode
 # also suppresses phone notifications so automated tests do not make noise.
 
@@ -35,6 +40,7 @@ input_select:
       - Armed Away
       - Armed Sleep
       - Entry Delay
+      - Fault
       - Alarm
     initial: Disarmed
     icon: mdi:shield-lock
@@ -54,6 +60,11 @@ input_boolean:
     name: Shop Alarm Test Mode
     initial: false
     icon: mdi:test-tube
+
+  shop_alarm_away_override:
+    name: Shop Alarm Away Override
+    initial: false
+    icon: mdi:shield-alert
 
 input_text:
   shop_alarm_notify_action:
@@ -87,6 +98,21 @@ script:
     mode: parallel
     max: 10
 
+  shop_alarm_arm_away_anyway:
+    alias: "Shop Alarm - Arm Away Anyway"
+    description: "Override an open-door Away arming fault for this arming cycle only."
+    sequence:
+      - condition: state
+        entity_id: input_select.shop_alarm_mode
+        state: "Away"
+      - condition: state
+        entity_id: input_select.shop_alarm_state
+        state: "Fault"
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.shop_alarm_away_override
+    mode: single
+
 automation:
   - id: shop_alarm_mode_disarmed
     alias: "Shop Alarm - Mode Disarmed"
@@ -100,7 +126,9 @@ automation:
           entity_id: switch.shop_siren_relay
       - action: input_boolean.turn_off
         target:
-          entity_id: input_boolean.shop_alarm_triggered
+          entity_id:
+            - input_boolean.shop_alarm_triggered
+            - input_boolean.shop_alarm_away_override
       - action: input_select.select_option
         target:
           entity_id: input_select.shop_alarm_state
@@ -120,7 +148,9 @@ automation:
           entity_id: switch.shop_siren_relay
       - action: input_boolean.turn_off
         target:
-          entity_id: input_boolean.shop_alarm_triggered
+          entity_id:
+            - input_boolean.shop_alarm_triggered
+            - input_boolean.shop_alarm_away_override
       - action: input_select.select_option
         target:
           entity_id: input_select.shop_alarm_state
@@ -140,7 +170,9 @@ automation:
           entity_id: switch.shop_siren_relay
       - action: input_boolean.turn_off
         target:
-          entity_id: input_boolean.shop_alarm_triggered
+          entity_id:
+            - input_boolean.shop_alarm_triggered
+            - input_boolean.shop_alarm_away_override
       - action: input_select.select_option
         target:
           entity_id: input_select.shop_alarm_state
@@ -150,6 +182,7 @@ automation:
 
   - id: shop_alarm_mode_away
     alias: "Shop Alarm - Mode Away"
+    description: "Block Away arming when the protected front door is open unless explicitly overridden."
     triggers:
       - trigger: state
         entity_id: input_select.shop_alarm_mode
@@ -161,6 +194,52 @@ automation:
       - action: input_boolean.turn_off
         target:
           entity_id: input_boolean.shop_alarm_triggered
+
+      - if:
+          - condition: template
+            value_template: >-
+              {{ is_state('binary_sensor.shop_front_door_opening', 'on')
+                 or is_state('input_boolean.shop_alarm_test_door_open', 'on') }}
+          - condition: state
+            entity_id: input_boolean.shop_alarm_away_override
+            state: "off"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.shop_alarm_state
+            data:
+              option: Fault
+          - action: script.shop_alarm_send_notification
+            data:
+              title: "Shop alarm cannot arm"
+              message: "Front door is open. Close it or choose Arm Away Anyway."
+          - wait_for_trigger:
+              - trigger: state
+                entity_id: binary_sensor.shop_front_door_opening
+                to: "off"
+              - trigger: state
+                entity_id: input_boolean.shop_alarm_test_door_open
+                to: "off"
+              - trigger: state
+                entity_id: input_boolean.shop_alarm_away_override
+                to: "on"
+              - trigger: state
+                entity_id: input_select.shop_alarm_mode
+                from: "Away"
+          - condition: state
+            entity_id: input_select.shop_alarm_mode
+            state: "Away"
+          - condition: template
+            value_template: >-
+              {{ is_state('input_boolean.shop_alarm_away_override', 'on')
+                 or (
+                   is_state('binary_sensor.shop_front_door_opening', 'off')
+                   and is_state('input_boolean.shop_alarm_test_door_open', 'off')
+                 ) }}
+
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.shop_alarm_away_override
       - action: input_select.select_option
         target:
           entity_id: input_select.shop_alarm_state

@@ -10,6 +10,14 @@ AWAY_OVERRIDE_SCRIPT = "script.shop_alarm_arm_away_anyway"
 TEST_DOOR = "input_boolean.shop_alarm_test_door_open"
 TEST_MODE = "input_boolean.shop_alarm_test_mode"
 NOTIFY_ACTION = "input_text.shop_alarm_notify_action"
+SIREN_RELAY = "switch.shop_siren_relay"
+WATER_SENSOR = "binary_sensor.water_detector"
+WATER_ENABLED = "input_boolean.shop_water_alarm_enabled"
+WATER_ACTIVE = "input_boolean.shop_water_alarm_active"
+WATER_TEST_WET = "input_boolean.shop_water_alarm_test_wet"
+WATER_ENABLE_SCRIPT = "script.shop_water_alarm_enable"
+WATER_DISABLE_SCRIPT = "script.shop_water_alarm_disable"
+WATER_RESET_SCRIPT = "script.shop_water_alarm_reset"
 
 
 def set_mode(ha: HomeAssistantClient, mode: str) -> None:
@@ -41,6 +49,26 @@ def reset_alarm(ha: HomeAssistantClient) -> None:
     set_mode(ha, "Disarmed")
     ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
     ha.wait_for_state(ALARM_TRIGGERED, "off", timeout=2)
+
+
+def run_script(ha: HomeAssistantClient, entity_id: str) -> None:
+    ha.call_service("script", "turn_on", {"entity_id": entity_id})
+
+
+def set_test_water_wet(ha: HomeAssistantClient, wet: bool) -> None:
+    set_boolean(ha, WATER_TEST_WET, wet)
+
+
+def reset_water_alarm(ha: HomeAssistantClient) -> None:
+    set_test_water_wet(ha, False)
+    run_script(ha, WATER_ENABLE_SCRIPT)
+    ha.wait_for_state(WATER_ENABLED, "on", timeout=2)
+
+    if ha.state(WATER_ACTIVE) == "on":
+        run_script(ha, WATER_RESET_SCRIPT)
+        ha.wait_for_state(WATER_ACTIVE, "off", timeout=2)
+
+    ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
 
 
 def test_home_assistant_api_is_running():
@@ -250,4 +278,99 @@ def test_overridden_away_door_reopen_runs_entry_delay_then_alarm():
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
+
+def test_water_alarm_entities_exist():
+    with HomeAssistantClient() as ha:
+        assert ha.state(WATER_SENSOR) in ("on", "off")
+        assert ha.state(WATER_ENABLED) in ("on", "off")
+        assert ha.state(WATER_ACTIVE) in ("on", "off")
+        assert ha.state(WATER_TEST_WET) in ("on", "off")
+        assert ha.state(SIREN_RELAY) in ("on", "off")
+
+
+def test_water_alarm_disabled_still_reports_wet_without_siren():
+    with HomeAssistantClient() as ha:
+        reset_water_alarm(ha)
+        try:
+            run_script(ha, WATER_DISABLE_SCRIPT)
+            ha.wait_for_state(WATER_ENABLED, "off", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
+
+            set_test_water_wet(ha, True)
+
+            assert ha.state(WATER_TEST_WET) == "on"
+            assert ha.state(WATER_ENABLED) == "off"
+            assert ha.state(WATER_ACTIVE) == "off"
+            assert ha.state(SIREN_RELAY) == "off"
+        finally:
+            set_test_water_wet(ha, False)
+            run_script(ha, WATER_ENABLE_SCRIPT)
+            ha.wait_for_state(WATER_ENABLED, "on", timeout=2)
+
+
+def test_water_alarm_enable_while_wet_triggers_immediately():
+    with HomeAssistantClient() as ha:
+        reset_water_alarm(ha)
+        try:
+            run_script(ha, WATER_DISABLE_SCRIPT)
+            ha.wait_for_state(WATER_ENABLED, "off", timeout=2)
+
+            set_test_water_wet(ha, True)
+            assert ha.state(WATER_ACTIVE) == "off"
+            assert ha.state(SIREN_RELAY) == "off"
+
+            run_script(ha, WATER_ENABLE_SCRIPT)
+
+            ha.wait_for_state(WATER_ENABLED, "on", timeout=2)
+            ha.wait_for_state(WATER_ACTIVE, "on", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "on", timeout=2)
+        finally:
+            set_test_water_wet(ha, False)
+            run_script(ha, WATER_RESET_SCRIPT)
+            ha.wait_for_state(WATER_ACTIVE, "off", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
+
+
+def test_water_alarm_latches_after_sensor_returns_dry():
+    with HomeAssistantClient() as ha:
+        reset_water_alarm(ha)
+        try:
+            set_test_water_wet(ha, True)
+            ha.wait_for_state(WATER_ACTIVE, "on", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "on", timeout=2)
+
+            set_test_water_wet(ha, False)
+
+            assert ha.state(WATER_TEST_WET) == "off"
+            assert ha.state(WATER_ACTIVE) == "on"
+            assert ha.state(SIREN_RELAY) == "on"
+        finally:
+            run_script(ha, WATER_RESET_SCRIPT)
+            ha.wait_for_state(WATER_ACTIVE, "off", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
+
+
+def test_water_alarm_reset_requires_dry_sensor():
+    with HomeAssistantClient() as ha:
+        reset_water_alarm(ha)
+        try:
+            set_test_water_wet(ha, True)
+            ha.wait_for_state(WATER_ACTIVE, "on", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "on", timeout=2)
+
+            run_script(ha, WATER_RESET_SCRIPT)
+
+            assert ha.state(WATER_TEST_WET) == "on"
+            assert ha.state(WATER_ACTIVE) == "on"
+            assert ha.state(SIREN_RELAY) == "on"
+
+            set_test_water_wet(ha, False)
+            run_script(ha, WATER_RESET_SCRIPT)
+
+            ha.wait_for_state(WATER_ACTIVE, "off", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
+        finally:
+            set_test_water_wet(ha, False)
+            if ha.state(WATER_ACTIVE) == "on":
+                run_script(ha, WATER_RESET_SCRIPT)
 

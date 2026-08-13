@@ -66,6 +66,21 @@ input_boolean:
     initial: false
     icon: mdi:shield-alert
 
+  shop_water_alarm_enabled:
+    name: Shop Water Alarm Enabled
+    initial: true
+    icon: mdi:water-alert
+
+  shop_water_alarm_active:
+    name: Shop Water Alarm Active
+    initial: false
+    icon: mdi:water-alert
+
+  shop_water_alarm_test_wet:
+    name: Shop Water Alarm Test Wet
+    initial: false
+    icon: mdi:test-tube
+
 input_text:
   shop_alarm_notify_action:
     name: Shop Alarm Notify Action
@@ -112,6 +127,63 @@ script:
         target:
           entity_id: input_boolean.shop_alarm_away_override
     mode: single
+
+  shop_water_alarm_enable:
+    alias: "Shop Water Alarm - Enable"
+    sequence:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.shop_water_alarm_enabled
+      - if:
+          - condition: template
+            value_template: >-
+              {{ is_state('binary_sensor.water_detector', 'on')
+                 or is_state('input_boolean.shop_water_alarm_test_wet', 'on') }}
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.shop_water_alarm_active
+          - action: switch.turn_on
+            target:
+              entity_id: switch.shop_siren_relay
+          - action: script.shop_alarm_send_notification
+            data:
+              title: "SHOP WATER ALARM"
+              message: "Water alarm enabled while the water sensor is active."
+
+  shop_water_alarm_disable:
+    alias: "Shop Water Alarm - Disable"
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.shop_water_alarm_enabled
+            - input_boolean.shop_water_alarm_active
+      - action: switch.turn_off
+        target:
+          entity_id: switch.shop_siren_relay
+
+
+  shop_water_alarm_reset:
+    alias: "Shop Water Alarm - Reset"
+    description: "Clear a latched water alarm only after both real and virtual water inputs are dry."
+    sequence:
+      - condition: template
+        value_template: >-
+          {{ is_state('binary_sensor.water_detector', 'off')
+             and is_state('input_boolean.shop_water_alarm_test_wet', 'off') }}
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.shop_water_alarm_active
+      - action: switch.turn_off
+        target:
+          entity_id: switch.shop_siren_relay
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "Shop water alarm reset"
+          message: "Water alarm was reset after the sensor returned to dry."
+    mode: single
+
 
 automation:
   - id: shop_alarm_mode_disarmed
@@ -311,3 +383,56 @@ automation:
           title: "SHOP ALARM"
           message: "Alarm triggered at the shop."
     mode: restart
+
+  - id: shop_water_alarm_trigger
+    alias: "Shop Water Alarm - Trigger"
+    description: "Trigger immediately when water contact closes while the water alarm is enabled."
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.water_detector
+        to: "on"
+      - trigger: state
+        entity_id: input_boolean.shop_water_alarm_test_wet
+        to: "on"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.shop_water_alarm_enabled
+        state: "on"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.shop_water_alarm_active
+      - action: switch.turn_on
+        target:
+          entity_id: switch.shop_siren_relay
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "SHOP WATER ALARM"
+          message: "Water detected at the shop."
+    mode: restart
+
+  - id: shop_water_alarm_sensor_dry
+    alias: "Shop Water Alarm - Sensor Dry"
+    description: "Report that the sensor is dry, but keep an active water alarm latched until reset."
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.water_detector
+        to: "off"
+      - trigger: state
+        entity_id: input_boolean.shop_water_alarm_test_wet
+        to: "off"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ is_state('binary_sensor.water_detector', 'off')
+             and is_state('input_boolean.shop_water_alarm_test_wet', 'off') }}
+      - condition: state
+        entity_id: input_boolean.shop_water_alarm_active
+        state: "on"
+    actions:
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "Shop water sensor dry"
+          message: "Water sensor returned to dry. Water alarm remains latched until reset."
+    mode: restart
+

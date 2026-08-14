@@ -61,6 +61,16 @@ input_boolean:
     initial: false
     icon: mdi:test-tube
 
+  shop_alarm_test_siren_unavailable:
+    name: Shop Alarm Test Siren Unavailable
+    initial: false
+    icon: mdi:test-tube
+
+  shop_alarm_test_front_door_unavailable:
+    name: Shop Alarm Test Front Door Unavailable
+    initial: false
+    icon: mdi:test-tube
+
   shop_alarm_away_override:
     name: Shop Alarm Away Override
     initial: false
@@ -80,6 +90,42 @@ input_boolean:
     name: Shop Water Alarm Test Wet
     initial: false
     icon: mdi:test-tube
+
+template:
+  - binary_sensor:
+      - name: Shop Alarm System Trouble
+        unique_id: shop_alarm_system_trouble
+        device_class: problem
+        state: >-
+          {{ states('switch.shop_siren_relay') in ['unavailable', 'unknown']
+             or states('binary_sensor.shop_front_door_opening') in ['unavailable', 'unknown']
+             or is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on')
+             or is_state('input_boolean.shop_alarm_test_front_door_unavailable', 'on') }}
+        attributes:
+          trouble_reason: >-
+            {% set siren = states('switch.shop_siren_relay') %}
+            {% set door = states('binary_sensor.shop_front_door_opening') %}
+            {% set test_siren = is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on') %}
+            {% set test_door = is_state('input_boolean.shop_alarm_test_front_door_unavailable', 'on') %}
+            {% if test_siren and test_door %}
+              TEST: siren relay unavailable; front door sensor unavailable
+            {% elif test_siren %}
+              TEST: siren relay unavailable
+            {% elif test_door %}
+              TEST: front door sensor unavailable
+            {% elif siren in ['unavailable', 'unknown'] and door in ['unavailable', 'unknown'] %}
+              Siren relay {{ siren }}; front door sensor {{ door }}
+            {% elif siren == 'unavailable' %}
+              Siren relay unavailable
+            {% elif siren == 'unknown' %}
+              Siren relay state unknown
+            {% elif door == 'unavailable' %}
+              Front door sensor unavailable
+            {% elif door == 'unknown' %}
+              Front door sensor state unknown
+            {% else %}
+              None
+            {% endif %}
 
 input_text:
   shop_alarm_notify_action:
@@ -382,6 +428,86 @@ automation:
         data:
           title: "SHOP ALARM"
           message: "Alarm triggered at the shop."
+    mode: restart
+
+  - id: shop_alarm_siren_trouble_notification
+    alias: "Shop Alarm - Siren Trouble Notification"
+    description: "Report when the siren relay becomes unavailable or its state becomes unknown."
+    triggers:
+      - trigger: state
+        entity_id: switch.shop_siren_relay
+        to: "unavailable"
+      - trigger: state
+        entity_id: switch.shop_siren_relay
+        to: "unknown"
+    actions:
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "SHOP ALARM TROUBLE"
+          message: >-
+            Siren relay is {{ states('switch.shop_siren_relay') }}.
+            The alarm system may be unable to sound the siren.
+    mode: restart
+
+  - id: shop_alarm_siren_trouble_restored
+    alias: "Shop Alarm - Siren Trouble Restored"
+    description: "Report when the siren relay returns after a trouble condition."
+    triggers:
+      - trigger: state
+        entity_id: switch.shop_siren_relay
+        from: "unavailable"
+      - trigger: state
+        entity_id: switch.shop_siren_relay
+        from: "unknown"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ states('switch.shop_siren_relay') in ['on', 'off'] }}
+    actions:
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "Shop alarm trouble cleared"
+          message: "Siren relay is available again."
+    mode: restart
+
+  - id: shop_alarm_front_door_trouble_notification
+    alias: "Shop Alarm - Front Door Trouble Notification"
+    description: "Report when the front door sensor becomes unavailable or its state becomes unknown."
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.shop_front_door_opening
+        to: "unavailable"
+      - trigger: state
+        entity_id: binary_sensor.shop_front_door_opening
+        to: "unknown"
+    actions:
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "SHOP ALARM TROUBLE"
+          message: >-
+            Front door sensor is {{ states('binary_sensor.shop_front_door_opening') }}.
+            The alarm system may be unable to detect the front door opening.
+    mode: restart
+
+  - id: shop_alarm_front_door_trouble_restored
+    alias: "Shop Alarm - Front Door Trouble Restored"
+    description: "Report when the front door sensor returns after a trouble condition."
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.shop_front_door_opening
+        from: "unavailable"
+      - trigger: state
+        entity_id: binary_sensor.shop_front_door_opening
+        from: "unknown"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ states('binary_sensor.shop_front_door_opening') in ['on', 'off'] }}
+    actions:
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "Shop alarm trouble cleared"
+          message: "Front door sensor is available again."
     mode: restart
 
   - id: shop_water_alarm_trigger

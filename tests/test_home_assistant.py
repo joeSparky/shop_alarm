@@ -11,6 +11,9 @@ TEST_DOOR = "input_boolean.shop_alarm_test_door_open"
 TEST_MODE = "input_boolean.shop_alarm_test_mode"
 NOTIFY_ACTION = "input_text.shop_alarm_notify_action"
 SIREN_RELAY = "switch.shop_siren_relay"
+SYSTEM_TROUBLE = "binary_sensor.shop_alarm_system_trouble"
+TEST_SIREN_UNAVAILABLE = "input_boolean.shop_alarm_test_siren_unavailable"
+TEST_FRONT_DOOR_UNAVAILABLE = "input_boolean.shop_alarm_test_front_door_unavailable"
 WATER_SENSOR = "binary_sensor.water_detector"
 WATER_ENABLED = "input_boolean.shop_water_alarm_enabled"
 WATER_ACTIVE = "input_boolean.shop_water_alarm_active"
@@ -278,6 +281,70 @@ def test_overridden_away_door_reopen_runs_entry_delay_then_alarm():
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
+
+
+def clear_supervision_test_inputs(ha: HomeAssistantClient) -> None:
+    set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
+    set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, False)
+
+
+def test_system_trouble_entity_exists():
+    with HomeAssistantClient() as ha:
+        assert ha.state(SYSTEM_TROUBLE) in ("on", "off")
+
+
+def test_supervision_test_inputs_exist():
+    with HomeAssistantClient() as ha:
+        assert ha.state(TEST_SIREN_UNAVAILABLE) in ("on", "off")
+        assert ha.state(TEST_FRONT_DOOR_UNAVAILABLE) in ("on", "off")
+
+
+def test_healthy_supervised_devices_clear_system_trouble():
+    with HomeAssistantClient() as ha:
+        clear_supervision_test_inputs(ha)
+        assert ha.state(SIREN_RELAY) in ("on", "off")
+        assert ha.state(FRONT_DOOR) in ("on", "off")
+        ha.wait_for_state(SYSTEM_TROUBLE, "off", timeout=2)
+
+
+def test_simulated_unavailable_siren_causes_system_trouble():
+    with HomeAssistantClient() as ha:
+        clear_supervision_test_inputs(ha)
+        try:
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, True)
+            ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
+        finally:
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
+            ha.wait_for_state(SYSTEM_TROUBLE, "off", timeout=2)
+
+
+def test_simulated_unavailable_front_door_causes_system_trouble():
+    with HomeAssistantClient() as ha:
+        clear_supervision_test_inputs(ha)
+        try:
+            set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, True)
+            ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
+        finally:
+            set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, False)
+            ha.wait_for_state(SYSTEM_TROUBLE, "off", timeout=2)
+
+
+def test_system_trouble_stays_on_until_all_faults_clear():
+    with HomeAssistantClient() as ha:
+        clear_supervision_test_inputs(ha)
+        try:
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, True)
+            set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, True)
+            ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
+
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
+            assert ha.state(SYSTEM_TROUBLE) == "on"
+
+            set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, False)
+            ha.wait_for_state(SYSTEM_TROUBLE, "off", timeout=2)
+        finally:
+            clear_supervision_test_inputs(ha)
+
 
 def test_water_alarm_entities_exist():
     with HomeAssistantClient() as ha:

@@ -20,6 +20,25 @@
 # Pytest can enable test mode to shorten delays to one second. Test mode
 # also suppresses phone notifications so automated tests do not make noise.
 
+# Native Home Assistant alarm panel.
+# The PIN is stored separately in /config/secrets.yaml as shop_alarm_pin.
+# The keypad is synchronized with the existing shop_alarm_mode helper below.
+# Existing alarm logic remains authoritative for delays, faults, siren,
+# water alarm, and system trouble.
+alarm_control_panel:
+  - platform: manual
+    name: Shop Alarm Keypad
+    unique_id: shop_alarm_keypad
+    code: !secret shop_alarm_pin
+    code_arm_required: false
+    arming_time: 0
+    delay_time: 0
+    trigger_time: 0
+    arming_states:
+      - armed_home
+      - armed_away
+      - armed_night
+
 input_select:
   shop_alarm_mode:
     name: Shop Alarm Mode
@@ -232,6 +251,101 @@ script:
 
 
 automation:
+  - id: shop_alarm_keypad_to_mode
+    alias: "Shop Alarm - Keypad To Mode"
+    description: "Translate native alarm-panel keypad selections into the existing shop alarm mode."
+    triggers:
+      - trigger: state
+        entity_id: alarm_control_panel.shop_alarm_keypad
+        to: "disarmed"
+      - trigger: state
+        entity_id: alarm_control_panel.shop_alarm_keypad
+        to: "armed_home"
+      - trigger: state
+        entity_id: alarm_control_panel.shop_alarm_keypad
+        to: "armed_away"
+      - trigger: state
+        entity_id: alarm_control_panel.shop_alarm_keypad
+        to: "armed_night"
+    actions:
+      - variables:
+          requested_mode: >-
+            {% set map = {
+              'disarmed': 'Disarmed',
+              'armed_home': 'Home',
+              'armed_away': 'Away',
+              'armed_night': 'Sleep'
+            } %}
+            {{ map.get(states('alarm_control_panel.shop_alarm_keypad'), 'Disarmed') }}
+      - condition: template
+        value_template: >-
+          {{ states('input_select.shop_alarm_mode') != requested_mode }}
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.shop_alarm_mode
+        data:
+          option: "{{ requested_mode }}"
+    mode: restart
+
+  - id: shop_alarm_mode_to_keypad
+    alias: "Shop Alarm - Mode To Keypad"
+    description: "Keep the native keypad display synchronized when shop_alarm_mode is changed elsewhere, including pytest."
+    triggers:
+      - trigger: state
+        entity_id: input_select.shop_alarm_mode
+    actions:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_mode
+                state: "Disarmed"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'disarmed') }}
+            sequence:
+              - action: alarm_control_panel.alarm_disarm
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+                data:
+                  code: !secret shop_alarm_pin
+
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_mode
+                state: "Home"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_home') }}
+            sequence:
+              - action: alarm_control_panel.alarm_arm_home
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_mode
+                state: "Away"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_away') }}
+            sequence:
+              - action: alarm_control_panel.alarm_arm_away
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_mode
+                state: "Sleep"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_night') }}
+            sequence:
+              - action: alarm_control_panel.alarm_arm_night
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+    mode: restart
+
   - id: shop_alarm_mode_disarmed
     alias: "Shop Alarm - Mode Disarmed"
     triggers:

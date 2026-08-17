@@ -3,26 +3,29 @@
 # Deployment target on Home Assistant OS:
 #   /config/packages/shop_alarm.yaml
 #
-# Alarm modes:
+# Alarm mode is status/target information written by the command scripts.
+# It is NOT an arming command and should not be changed directly by the UI.
 #   Disarmed - no door alarm
-#   Home     - user is at the shop; front-door openings are ignored
+#   Home     - front door is protected; opening it starts Entry Delay
 #   Away     - front door is protected after an exit delay
-#   Sleep    - front door is protected immediately
+#   Sleep    - front door is protected after an exit delay
 #
 # Alarm state tracks the Ring-style progression:
 #   Disarmed -> Exit Delay -> Armed Away -> Entry Delay -> Alarm
 #
-# Away arming fault handling:
-#   If the protected front door is open when Away is selected, the alarm
-#   enters Fault and waits. Closing the door starts the exit delay.
-#   "Shop Alarm - Arm Away Anyway" provides a one-cycle override.
+# Arming fault handling:
+#   Home, Away, and Sleep refuse normal arming when a critical system trouble
+#   exists. Away and Sleep also refuse normal arming when the protected front
+#   door is open. A one-cycle fault override allows the operator to arm anyway
+#   after the fault is clearly displayed. Exit Delay can be cancelled without
+#   a PIN because the system has not armed yet.
 #
 # Pytest can enable test mode to shorten delays to one second. Test mode
 # also suppresses phone notifications so automated tests do not make noise.
 
 # Native Home Assistant alarm panel.
 # The PIN is stored separately in /config/secrets.yaml as shop_alarm_pin.
-# The keypad is synchronized with the existing shop_alarm_mode helper below.
+# The keypad is synchronized for status/disarming only; dashboard scripts initiate arming.
 # Existing alarm logic remains authoritative for delays, faults, siren,
 # water alarm, and system trouble.
 alarm_control_panel:
@@ -90,10 +93,22 @@ input_boolean:
     initial: false
     icon: mdi:test-tube
 
+  shop_alarm_fault_override:
+    name: Shop Alarm Fault Override
+    initial: false
+    icon: mdi:shield-alert
+
+  # Retained for compatibility with the existing pytest suite and old UI.
+  # New UI controls use shop_alarm_fault_override instead.
   shop_alarm_away_override:
     name: Shop Alarm Away Override
     initial: false
     icon: mdi:shield-alert
+
+  shop_alarm_keypad_sync:
+    name: Shop Alarm Keypad Sync
+    initial: false
+    icon: mdi:sync
 
   shop_water_alarm_enabled:
     name: Shop Water Alarm Enabled
@@ -146,6 +161,58 @@ template:
               None
             {% endif %}
 
+  - binary_sensor:
+      - name: Shop Alarm Home Ready
+        unique_id: shop_alarm_home_ready
+        device_class: running
+        state: >-
+          {{ is_state('binary_sensor.shop_alarm_system_trouble', 'off') }}
+        attributes:
+          fault_reason: >-
+            {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
+              {{ state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason') }}
+            {% else %}
+              None
+            {% endif %}
+
+      - name: Shop Alarm Away Ready
+        unique_id: shop_alarm_away_ready
+        device_class: running
+        state: >-
+          {{ is_state('binary_sensor.shop_alarm_system_trouble', 'off')
+             and is_state('binary_sensor.shop_front_door_opening', 'off')
+             and is_state('input_boolean.shop_alarm_test_door_open', 'off') }}
+        attributes:
+          fault_reason: >-
+            {% set reasons = [] %}
+            {% if is_state('binary_sensor.shop_front_door_opening', 'on')
+                  or is_state('input_boolean.shop_alarm_test_door_open', 'on') %}
+              {% set reasons = reasons + ['Front door is open'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
+              {% set reasons = reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
+            {% endif %}
+            {{ reasons | join('; ') if reasons else 'None' }}
+
+      - name: Shop Alarm Sleep Ready
+        unique_id: shop_alarm_sleep_ready
+        device_class: running
+        state: >-
+          {{ is_state('binary_sensor.shop_alarm_system_trouble', 'off')
+             and is_state('binary_sensor.shop_front_door_opening', 'off')
+             and is_state('input_boolean.shop_alarm_test_door_open', 'off') }}
+        attributes:
+          fault_reason: >-
+            {% set reasons = [] %}
+            {% if is_state('binary_sensor.shop_front_door_opening', 'on')
+                  or is_state('input_boolean.shop_alarm_test_door_open', 'on') %}
+              {% set reasons = reasons + ['Front door is open'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
+              {% set reasons = reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
+            {% endif %}
+            {{ reasons | join('; ') if reasons else 'None' }}
+
 input_text:
   shop_alarm_notify_action:
     name: Shop Alarm Notify Action
@@ -178,20 +245,277 @@ script:
     mode: parallel
     max: 10
 
-  shop_alarm_arm_away_anyway:
-    alias: "Shop Alarm - Arm Away Anyway"
-    description: "Override an open-door Away arming fault for this arming cycle only."
+  # ---------------------------------------------------------------------------
+  # Alarm command API
+  #
+  # Dashboard cards and tests call the small request/override wrappers below.
+  # They all funnel into shop_alarm_arm, which is the single authority for
+  # arming transitions.  Changing input_select.shop_alarm_mode by itself does
+  # NOT arm or disarm the system.
+  # ---------------------------------------------------------------------------
+
+  shop_alarm_set_status:
+    alias: "Shop Alarm - Set Status"
+    description: "Internal helper: update the displayed target mode and actual alarm state together."
+    fields:
+      mode:
+        description: "Disarmed, Home, Away, or Sleep"
+      state:
+        description: "Actual Shop Alarm State"
     sequence:
-      - condition: state
-        entity_id: input_select.shop_alarm_mode
-        state: "Away"
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.shop_alarm_state
+        data:
+          option: "{{ state }}"
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.shop_alarm_mode
+        data:
+          option: "{{ mode }}"
+    mode: queued
+    max: 10
+
+  shop_alarm_arm:
+    alias: "Shop Alarm - Arm"
+    description: "Single authoritative arming routine for Home, Away, and Sleep."
+    fields:
+      requested_mode:
+        description: "Home, Away, or Sleep"
+      override_fault:
+        description: "Allow this one arming cycle despite current readiness faults."
+    sequence:
+      - variables:
+          mode_requested: "{{ requested_mode }}"
+          override_requested: "{{ override_fault | default(false) | bool }}"
+          current_state: "{{ states('input_select.shop_alarm_state') }}"
+          fault_reason: >-
+            {% set reasons = [] %}
+            {% if requested_mode in ['Away', 'Sleep']
+                  and (
+                    is_state('binary_sensor.shop_front_door_opening', 'on')
+                    or is_state('input_boolean.shop_alarm_test_door_open', 'on')
+                  ) %}
+              {% set reasons = reasons + ['Front door is open'] %}
+            {% endif %}
+            {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
+              {% set reasons = reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
+            {% endif %}
+            {{ reasons | join('; ') }}
+
+      - if:
+          - condition: template
+            value_template: "{{ mode_requested not in ['Home', 'Away', 'Sleep'] }}"
+        then:
+          - stop: "Invalid shop alarm mode request"
+
+      # Only a disarmed system may begin a new arming cycle.
+      - if:
+          - condition: template
+            value_template: "{{ current_state != 'Disarmed' }}"
+        then:
+          - action: script.shop_alarm_send_notification
+            data:
+              title: "Shop alarm"
+              message: "Arm {{ mode_requested }} ignored because the system is {{ current_state }}."
+          - stop: "Arming request rejected because system is not Disarmed"
+
+      # A normal request with a readiness fault leaves the system truly
+      # Disarmed/Disarmed.  The explicit OVERRIDE FAULT buttons call this same
+      # routine with override_fault=true.
+      - if:
+          - condition: template
+            value_template: "{{ fault_reason | trim != '' and not override_requested }}"
+        then:
+          - action: script.shop_alarm_set_status
+            data:
+              mode: Disarmed
+              state: Disarmed
+          - action: script.shop_alarm_send_notification
+            data:
+              title: "Shop alarm cannot arm normally"
+              message: >-
+                {{ mode_requested }}: {{ fault_reason }}.
+                Correct the problem or use {{ mode_requested | upper }} - OVERRIDE FAULT.
+          - stop: "Arming blocked by readiness fault"
+
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.shop_alarm_triggered
+
+      # Arming never commands the siren relay.  A relay that disappears after
+      # the pre-arm check therefore cannot abort the state-machine transition.
+      # Relay commands are reserved for actual alarm/silence operations and
+      # use continue_on_error there.
+
+      - if:
+          - condition: template
+            value_template: "{{ mode_requested == 'Home' }}"
+        then:
+          - action: script.shop_alarm_set_status
+            data:
+              mode: Home
+              state: Armed Home
+          - if:
+              - condition: template
+                value_template: "{{ override_requested }}"
+            then:
+              - action: script.shop_alarm_send_notification
+                data:
+                  title: "SHOP ALARM OVERRIDE"
+                  message: >-
+                    Home arming override accepted.
+                    Fault: {{ fault_reason if fault_reason | trim != '' else 'fault was manually overridden' }}.
+          - stop: "Home armed"
+
+      # Away and Sleep share the same exit-delay path.
+      - action: script.shop_alarm_set_status
+        data:
+          mode: "{{ mode_requested }}"
+          state: Exit Delay
+
+      - if:
+          - condition: template
+            value_template: "{{ override_requested }}"
+        then:
+          - action: script.shop_alarm_send_notification
+            data:
+              title: "SHOP ALARM OVERRIDE"
+              message: >-
+                {{ mode_requested }} arming override accepted.
+                Fault: {{ fault_reason if fault_reason | trim != '' else 'fault was manually overridden' }}.
+
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "Shop alarm"
+          message: "{{ mode_requested }} selected. Exit delay started."
+
+      - delay:
+          seconds: >-
+            {{ 1 if is_state('input_boolean.shop_alarm_test_mode', 'on') else 30 }}
+
+      # Cancellation/disarming changes the state away from Exit Delay, so this
+      # check safely terminates the pending arming cycle.
       - condition: state
         entity_id: input_select.shop_alarm_state
-        state: "Fault"
-      - action: input_boolean.turn_on
+        state: "Exit Delay"
+
+      - if:
+          - condition: template
+            value_template: "{{ mode_requested == 'Away' }}"
+        then:
+          - action: script.shop_alarm_set_status
+            data:
+              mode: Away
+              state: Armed Away
+        else:
+          - action: script.shop_alarm_set_status
+            data:
+              mode: Sleep
+              state: Armed Sleep
+    mode: parallel
+    max: 4
+
+  shop_alarm_disarm:
+    alias: "Shop Alarm - Disarm"
+    description: "Authoritative burglary-alarm disarm routine. PIN authorization is handled by the caller/keypad."
+    sequence:
+      # State/mode are changed first so a slow or failed relay command can
+      # never prevent the logical alarm from disarming.
+      - action: script.shop_alarm_set_status
+        data:
+          mode: Disarmed
+          state: Disarmed
+      - action: input_boolean.turn_off
         target:
-          entity_id: input_boolean.shop_alarm_away_override
-    mode: single
+          entity_id: input_boolean.shop_alarm_triggered
+
+      # Do not silence an independent active water alarm.
+      - if:
+          - condition: state
+            entity_id: input_boolean.shop_water_alarm_active
+            state: "off"
+        then:
+          - action: switch.turn_off
+            continue_on_error: true
+            target:
+              entity_id: switch.shop_siren_relay
+    mode: restart
+
+  shop_alarm_request_home:
+    alias: "Shop Alarm - Request Home"
+    sequence:
+      - action: script.shop_alarm_arm
+        data:
+          requested_mode: Home
+          override_fault: false
+    mode: restart
+
+  shop_alarm_request_away:
+    alias: "Shop Alarm - Request Away"
+    sequence:
+      - action: script.shop_alarm_arm
+        data:
+          requested_mode: Away
+          override_fault: false
+    mode: restart
+
+  shop_alarm_request_sleep:
+    alias: "Shop Alarm - Request Sleep"
+    sequence:
+      - action: script.shop_alarm_arm
+        data:
+          requested_mode: Sleep
+          override_fault: false
+    mode: restart
+
+  shop_alarm_override_home:
+    alias: "Shop Alarm - Home Override Fault"
+    sequence:
+      - action: script.shop_alarm_arm
+        data:
+          requested_mode: Home
+          override_fault: true
+    mode: restart
+
+  shop_alarm_override_away:
+    alias: "Shop Alarm - Away Override Fault"
+    sequence:
+      - action: script.shop_alarm_arm
+        data:
+          requested_mode: Away
+          override_fault: true
+    mode: restart
+
+  shop_alarm_override_sleep:
+    alias: "Shop Alarm - Sleep Override Fault"
+    sequence:
+      - action: script.shop_alarm_arm
+        data:
+          requested_mode: Sleep
+          override_fault: true
+    mode: restart
+
+  shop_alarm_cancel_exit_delay:
+    alias: "Shop Alarm - Cancel Exit Delay"
+    description: "Cancel Exit Delay and return to Disarmed without requiring a PIN."
+    sequence:
+      - condition: state
+        entity_id: input_select.shop_alarm_state
+        state: "Exit Delay"
+      - action: script.shop_alarm_disarm
+    mode: restart
+
+  # Compatibility name retained for older tests/UI.  It now uses the same
+  # authoritative arming routine rather than manipulating helper booleans.
+  shop_alarm_arm_away_anyway:
+    alias: "Shop Alarm - Arm Away Anyway"
+    sequence:
+      - action: script.shop_alarm_arm
+        data:
+          requested_mode: Away
+          override_fault: true
+    mode: restart
 
   shop_water_alarm_enable:
     alias: "Shop Water Alarm - Enable"
@@ -209,6 +533,7 @@ script:
             target:
               entity_id: input_boolean.shop_water_alarm_active
           - action: switch.turn_on
+            continue_on_error: true
             target:
               entity_id: switch.shop_siren_relay
           - action: script.shop_alarm_send_notification
@@ -225,6 +550,7 @@ script:
             - input_boolean.shop_water_alarm_enabled
             - input_boolean.shop_water_alarm_active
       - action: switch.turn_off
+        continue_on_error: true
         target:
           entity_id: switch.shop_siren_relay
 
@@ -241,6 +567,7 @@ script:
         target:
           entity_id: input_boolean.shop_water_alarm_active
       - action: switch.turn_off
+        continue_on_error: true
         target:
           entity_id: switch.shop_siren_relay
       - action: script.shop_alarm_send_notification
@@ -252,44 +579,128 @@ script:
 
 automation:
   - id: shop_alarm_keypad_to_mode
-    alias: "Shop Alarm - Keypad To Mode"
-    description: "Translate native alarm-panel keypad selections into the existing shop alarm mode."
+    alias: "Shop Alarm - Keypad Disarm"
+    description: "The keypad may disarm the system; dashboard buttons are the only arming commands."
     triggers:
       - trigger: state
         entity_id: alarm_control_panel.shop_alarm_keypad
         to: "disarmed"
-      - trigger: state
-        entity_id: alarm_control_panel.shop_alarm_keypad
-        to: "armed_home"
-      - trigger: state
-        entity_id: alarm_control_panel.shop_alarm_keypad
-        to: "armed_away"
-      - trigger: state
-        entity_id: alarm_control_panel.shop_alarm_keypad
-        to: "armed_night"
-    actions:
-      - variables:
-          requested_mode: >-
-            {% set map = {
-              'disarmed': 'Disarmed',
-              'armed_home': 'Home',
-              'armed_away': 'Away',
-              'armed_night': 'Sleep'
-            } %}
-            {{ map.get(states('alarm_control_panel.shop_alarm_keypad'), 'Disarmed') }}
+    conditions:
+      - condition: state
+        entity_id: input_boolean.shop_alarm_keypad_sync
+        state: "off"
       - condition: template
-        value_template: >-
-          {{ states('input_select.shop_alarm_mode') != requested_mode }}
-      - action: input_select.select_option
-        target:
-          entity_id: input_select.shop_alarm_mode
-        data:
-          option: "{{ requested_mode }}"
+        value_template: "{{ not is_state('input_select.shop_alarm_mode', 'Disarmed') or not is_state('input_select.shop_alarm_state', 'Disarmed') }}"
+    actions:
+      - action: script.shop_alarm_disarm
     mode: restart
 
-  - id: shop_alarm_mode_to_keypad
-    alias: "Shop Alarm - Mode To Keypad"
-    description: "Keep the native keypad display synchronized when shop_alarm_mode is changed elsewhere, including pytest."
+  - id: shop_alarm_state_to_keypad
+    alias: "Shop Alarm - State To Keypad"
+    description: "Make the native keypad display follow the authoritative shop alarm state, not merely the requested mode."
+    triggers:
+      - trigger: state
+        entity_id: input_select.shop_alarm_state
+    actions:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_state
+                state: "Disarmed"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'disarmed') }}
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+              - action: alarm_control_panel.alarm_disarm
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+                data:
+                  code: !secret shop_alarm_pin
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_state
+                state: "Armed Home"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_home') }}
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+              - action: alarm_control_panel.alarm_arm_home
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_state
+                state: "Armed Away"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_away') }}
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+              - action: alarm_control_panel.alarm_arm_away
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_state
+                state: "Armed Sleep"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_night') }}
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+              - action: alarm_control_panel.alarm_arm_night
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+
+          - conditions:
+              - condition: state
+                entity_id: input_select.shop_alarm_state
+                state: "Fault"
+              - condition: template
+                value_template: >-
+                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'disarmed') }}
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+              - action: alarm_control_panel.alarm_disarm
+                target:
+                  entity_id: alarm_control_panel.shop_alarm_keypad
+                data:
+                  code: !secret shop_alarm_pin
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.shop_alarm_keypad_sync
+    mode: restart
+
+  - id: shop_alarm_mode_guard
+    alias: "Shop Alarm - Mode Guard"
+    description: "Keep the mode helper as status only; reject direct mode edits in stable alarm states."
     triggers:
       - trigger: state
         entity_id: input_select.shop_alarm_mode
@@ -297,201 +708,55 @@ automation:
       - choose:
           - conditions:
               - condition: state
-                entity_id: input_select.shop_alarm_mode
+                entity_id: input_select.shop_alarm_state
                 state: "Disarmed"
               - condition: template
-                value_template: >-
-                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'disarmed') }}
+                value_template: "{{ not is_state('input_select.shop_alarm_mode', 'Disarmed') }}"
             sequence:
-              - action: alarm_control_panel.alarm_disarm
+              - action: input_select.select_option
                 target:
-                  entity_id: alarm_control_panel.shop_alarm_keypad
+                  entity_id: input_select.shop_alarm_mode
                 data:
-                  code: !secret shop_alarm_pin
+                  option: Disarmed
 
           - conditions:
               - condition: state
-                entity_id: input_select.shop_alarm_mode
-                state: "Home"
+                entity_id: input_select.shop_alarm_state
+                state: "Armed Home"
               - condition: template
-                value_template: >-
-                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_home') }}
+                value_template: "{{ not is_state('input_select.shop_alarm_mode', 'Home') }}"
             sequence:
-              - action: alarm_control_panel.alarm_arm_home
+              - action: input_select.select_option
                 target:
-                  entity_id: alarm_control_panel.shop_alarm_keypad
+                  entity_id: input_select.shop_alarm_mode
+                data:
+                  option: Home
 
           - conditions:
               - condition: state
-                entity_id: input_select.shop_alarm_mode
-                state: "Away"
+                entity_id: input_select.shop_alarm_state
+                state: "Armed Away"
               - condition: template
-                value_template: >-
-                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_away') }}
+                value_template: "{{ not is_state('input_select.shop_alarm_mode', 'Away') }}"
             sequence:
-              - action: alarm_control_panel.alarm_arm_away
+              - action: input_select.select_option
                 target:
-                  entity_id: alarm_control_panel.shop_alarm_keypad
+                  entity_id: input_select.shop_alarm_mode
+                data:
+                  option: Away
 
           - conditions:
               - condition: state
-                entity_id: input_select.shop_alarm_mode
-                state: "Sleep"
+                entity_id: input_select.shop_alarm_state
+                state: "Armed Sleep"
               - condition: template
-                value_template: >-
-                  {{ not is_state('alarm_control_panel.shop_alarm_keypad', 'armed_night') }}
+                value_template: "{{ not is_state('input_select.shop_alarm_mode', 'Sleep') }}"
             sequence:
-              - action: alarm_control_panel.alarm_arm_night
+              - action: input_select.select_option
                 target:
-                  entity_id: alarm_control_panel.shop_alarm_keypad
-    mode: restart
-
-  - id: shop_alarm_mode_disarmed
-    alias: "Shop Alarm - Mode Disarmed"
-    triggers:
-      - trigger: state
-        entity_id: input_select.shop_alarm_mode
-        to: "Disarmed"
-    actions:
-      - action: switch.turn_off
-        target:
-          entity_id: switch.shop_siren_relay
-      - action: input_boolean.turn_off
-        target:
-          entity_id:
-            - input_boolean.shop_alarm_triggered
-            - input_boolean.shop_alarm_away_override
-      - action: input_select.select_option
-        target:
-          entity_id: input_select.shop_alarm_state
-        data:
-          option: Disarmed
-    mode: restart
-
-  - id: shop_alarm_mode_home
-    alias: "Shop Alarm - Mode Home"
-    triggers:
-      - trigger: state
-        entity_id: input_select.shop_alarm_mode
-        to: "Home"
-    actions:
-      - action: switch.turn_off
-        target:
-          entity_id: switch.shop_siren_relay
-      - action: input_boolean.turn_off
-        target:
-          entity_id:
-            - input_boolean.shop_alarm_triggered
-            - input_boolean.shop_alarm_away_override
-      - action: input_select.select_option
-        target:
-          entity_id: input_select.shop_alarm_state
-        data:
-          option: Armed Home
-    mode: restart
-
-  - id: shop_alarm_mode_sleep
-    alias: "Shop Alarm - Mode Sleep"
-    triggers:
-      - trigger: state
-        entity_id: input_select.shop_alarm_mode
-        to: "Sleep"
-    actions:
-      - action: switch.turn_off
-        target:
-          entity_id: switch.shop_siren_relay
-      - action: input_boolean.turn_off
-        target:
-          entity_id:
-            - input_boolean.shop_alarm_triggered
-            - input_boolean.shop_alarm_away_override
-      - action: input_select.select_option
-        target:
-          entity_id: input_select.shop_alarm_state
-        data:
-          option: Armed Sleep
-    mode: restart
-
-  - id: shop_alarm_mode_away
-    alias: "Shop Alarm - Mode Away"
-    description: "Block Away arming when the protected front door is open unless explicitly overridden."
-    triggers:
-      - trigger: state
-        entity_id: input_select.shop_alarm_mode
-        to: "Away"
-    actions:
-      - action: switch.turn_off
-        target:
-          entity_id: switch.shop_siren_relay
-      - action: input_boolean.turn_off
-        target:
-          entity_id: input_boolean.shop_alarm_triggered
-
-      - if:
-          - condition: template
-            value_template: >-
-              {{ is_state('binary_sensor.shop_front_door_opening', 'on')
-                 or is_state('input_boolean.shop_alarm_test_door_open', 'on') }}
-          - condition: state
-            entity_id: input_boolean.shop_alarm_away_override
-            state: "off"
-        then:
-          - action: input_select.select_option
-            target:
-              entity_id: input_select.shop_alarm_state
-            data:
-              option: Fault
-          - action: script.shop_alarm_send_notification
-            data:
-              title: "Shop alarm cannot arm"
-              message: "Front door is open. Close it or choose Arm Away Anyway."
-          - wait_for_trigger:
-              - trigger: state
-                entity_id: binary_sensor.shop_front_door_opening
-                to: "off"
-              - trigger: state
-                entity_id: input_boolean.shop_alarm_test_door_open
-                to: "off"
-              - trigger: state
-                entity_id: input_boolean.shop_alarm_away_override
-                to: "on"
-              - trigger: state
-                entity_id: input_select.shop_alarm_mode
-                from: "Away"
-          - condition: state
-            entity_id: input_select.shop_alarm_mode
-            state: "Away"
-          - condition: template
-            value_template: >-
-              {{ is_state('input_boolean.shop_alarm_away_override', 'on')
-                 or (
-                   is_state('binary_sensor.shop_front_door_opening', 'off')
-                   and is_state('input_boolean.shop_alarm_test_door_open', 'off')
-                 ) }}
-
-      - action: input_boolean.turn_off
-        target:
-          entity_id: input_boolean.shop_alarm_away_override
-      - action: input_select.select_option
-        target:
-          entity_id: input_select.shop_alarm_state
-        data:
-          option: Exit Delay
-      - action: script.shop_alarm_send_notification
-        data:
-          title: "Shop alarm"
-          message: "Away selected. Exit delay started."
-      - delay:
-          seconds: >-
-            {{ 1 if is_state('input_boolean.shop_alarm_test_mode', 'on') else 30 }}
-      - condition: state
-        entity_id: input_select.shop_alarm_mode
-        state: "Away"
-      - action: input_select.select_option
-        target:
-          entity_id: input_select.shop_alarm_state
-        data:
-          option: Armed Away
+                  entity_id: input_select.shop_alarm_mode
+                data:
+                  option: Sleep
     mode: restart
 
   - id: shop_alarm_door_entry_delay
@@ -507,7 +772,7 @@ automation:
     conditions:
       - condition: template
         value_template: >-
-          {{ states('input_select.shop_alarm_state') in ['Armed Away', 'Armed Sleep'] }}
+          {{ states('input_select.shop_alarm_state') in ['Armed Home', 'Armed Away', 'Armed Sleep'] }}
     actions:
       - action: input_select.select_option
         target:
@@ -524,20 +789,20 @@ automation:
       - condition: state
         entity_id: input_select.shop_alarm_state
         state: "Entry Delay"
-      - condition: template
-        value_template: >-
-          {{ states('input_select.shop_alarm_mode') in ['Away', 'Sleep'] }}
+      # The automation could only start from an armed state, so
+      # once Entry Delay expires we do not consult the mutable mode helper.
       - action: input_boolean.turn_on
         target:
           entity_id: input_boolean.shop_alarm_triggered
-      - action: switch.turn_on
-        target:
-          entity_id: switch.shop_siren_relay
       - action: input_select.select_option
         target:
           entity_id: input_select.shop_alarm_state
         data:
           option: Alarm
+      - action: switch.turn_on
+        continue_on_error: true
+        target:
+          entity_id: switch.shop_siren_relay
       - action: script.shop_alarm_send_notification
         data:
           title: "SHOP ALARM"
@@ -643,6 +908,7 @@ automation:
         target:
           entity_id: input_boolean.shop_water_alarm_active
       - action: switch.turn_on
+        continue_on_error: true
         target:
           entity_id: switch.shop_siren_relay
       - action: script.shop_alarm_send_notification

@@ -5,8 +5,6 @@ FRONT_DOOR = "binary_sensor.shop_front_door_opening"
 ALARM_MODE = "input_select.shop_alarm_mode"
 ALARM_STATE = "input_select.shop_alarm_state"
 ALARM_TRIGGERED = "input_boolean.shop_alarm_triggered"
-AWAY_OVERRIDE = "input_boolean.shop_alarm_away_override"
-AWAY_OVERRIDE_SCRIPT = "script.shop_alarm_arm_away_anyway"
 TEST_DOOR = "input_boolean.shop_alarm_test_door_open"
 TEST_MODE = "input_boolean.shop_alarm_test_mode"
 NOTIFY_ACTION = "input_text.shop_alarm_notify_action"
@@ -14,6 +12,16 @@ SIREN_RELAY = "switch.shop_siren_relay"
 SYSTEM_TROUBLE = "binary_sensor.shop_alarm_system_trouble"
 TEST_SIREN_UNAVAILABLE = "input_boolean.shop_alarm_test_siren_unavailable"
 TEST_FRONT_DOOR_UNAVAILABLE = "input_boolean.shop_alarm_test_front_door_unavailable"
+
+REQUEST_HOME = "script.shop_alarm_request_home"
+REQUEST_AWAY = "script.shop_alarm_request_away"
+REQUEST_SLEEP = "script.shop_alarm_request_sleep"
+OVERRIDE_HOME = "script.shop_alarm_override_home"
+OVERRIDE_AWAY = "script.shop_alarm_override_away"
+OVERRIDE_SLEEP = "script.shop_alarm_override_sleep"
+DISARM_SCRIPT = "script.shop_alarm_disarm"
+CANCEL_EXIT_DELAY = "script.shop_alarm_cancel_exit_delay"
+
 WATER_SENSOR = "binary_sensor.water_detector"
 WATER_ENABLED = "input_boolean.shop_water_alarm_enabled"
 WATER_ACTIVE = "input_boolean.shop_water_alarm_active"
@@ -23,13 +31,13 @@ WATER_DISABLE_SCRIPT = "script.shop_water_alarm_disable"
 WATER_RESET_SCRIPT = "script.shop_water_alarm_reset"
 
 
-def set_mode(ha: HomeAssistantClient, mode: str) -> None:
+def set_mode_directly(ha: HomeAssistantClient, mode: str) -> None:
+    """Direct helper edit used only to verify that Mode is status, not a command."""
     ha.call_service(
         "input_select",
         "select_option",
         {"entity_id": ALARM_MODE, "option": mode},
     )
-    ha.wait_for_state(ALARM_MODE, mode, timeout=2)
 
 
 def set_boolean(ha: HomeAssistantClient, entity_id: str, on: bool) -> None:
@@ -37,6 +45,10 @@ def set_boolean(ha: HomeAssistantClient, entity_id: str, on: bool) -> None:
     target_state = "on" if on else "off"
     ha.call_service("input_boolean", service, {"entity_id": entity_id})
     ha.wait_for_state(entity_id, target_state, timeout=2)
+
+
+def run_script(ha: HomeAssistantClient, entity_id: str) -> None:
+    ha.call_service("script", "turn_on", {"entity_id": entity_id})
 
 
 def close_test_door(ha: HomeAssistantClient) -> None:
@@ -47,15 +59,27 @@ def open_test_door(ha: HomeAssistantClient) -> None:
     set_boolean(ha, TEST_DOOR, True)
 
 
+def clear_supervision_test_inputs(ha: HomeAssistantClient) -> None:
+    set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
+    set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, False)
+
+
 def reset_alarm(ha: HomeAssistantClient) -> None:
     close_test_door(ha)
-    set_mode(ha, "Disarmed")
+    clear_supervision_test_inputs(ha)
+    run_script(ha, DISARM_SCRIPT)
     ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
+    ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
     ha.wait_for_state(ALARM_TRIGGERED, "off", timeout=2)
 
 
-def run_script(ha: HomeAssistantClient, entity_id: str) -> None:
-    ha.call_service("script", "turn_on", {"entity_id": entity_id})
+def arm_and_wait(ha: HomeAssistantClient, script: str, final_state: str) -> None:
+    run_script(ha, script)
+    if final_state in ("Armed Away", "Armed Sleep"):
+        ha.wait_for_state(ALARM_STATE, "Exit Delay", timeout=2)
+        ha.wait_for_state(ALARM_STATE, final_state, timeout=3)
+    else:
+        ha.wait_for_state(ALARM_STATE, final_state, timeout=2)
 
 
 def set_test_water_wet(ha: HomeAssistantClient, wet: bool) -> None:
@@ -71,7 +95,13 @@ def reset_water_alarm(ha: HomeAssistantClient) -> None:
         run_script(ha, WATER_RESET_SCRIPT)
         ha.wait_for_state(WATER_ACTIVE, "off", timeout=2)
 
-    ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
+    if ha.state(SIREN_RELAY) in ("on", "off"):
+        ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# Basic Home Assistant / entity checks
+# ---------------------------------------------------------------------------
 
 
 def test_home_assistant_api_is_running():
@@ -91,13 +121,9 @@ def test_wait_for_front_door_current_state():
         assert result["state"] == current_state
 
 
-def test_shop_alarm_mode_entity_exists():
+def test_shop_alarm_entities_exist():
     with HomeAssistantClient() as ha:
         assert ha.state(ALARM_MODE) in ("Disarmed", "Home", "Away", "Sleep")
-
-
-def test_shop_alarm_state_entity_exists():
-    with HomeAssistantClient() as ha:
         assert ha.state(ALARM_STATE) in (
             "Disarmed",
             "Armed Home",
@@ -108,11 +134,22 @@ def test_shop_alarm_state_entity_exists():
             "Fault",
             "Alarm",
         )
-
-
-def test_shop_alarm_triggered_entity_exists():
-    with HomeAssistantClient() as ha:
         assert ha.state(ALARM_TRIGGERED) in ("on", "off")
+
+
+def test_command_scripts_exist():
+    with HomeAssistantClient() as ha:
+        for entity_id in (
+            REQUEST_HOME,
+            REQUEST_AWAY,
+            REQUEST_SLEEP,
+            OVERRIDE_HOME,
+            OVERRIDE_AWAY,
+            OVERRIDE_SLEEP,
+            DISARM_SCRIPT,
+            CANCEL_EXIT_DELAY,
+        ):
+            assert ha.state(entity_id) in ("on", "off")
 
 
 def test_shop_alarm_notify_action_entity_exists():
@@ -123,7 +160,6 @@ def test_shop_alarm_notify_action_entity_exists():
 def test_mobile_app_notify_action_is_configured():
     with HomeAssistantClient() as ha:
         candidates = ha.service_names("notify", prefix="mobile_app_")
-
         assert "mobile_app_iphone" in candidates, (
             "Expected Home Assistant notification service "
             "'mobile_app_iphone'; "
@@ -131,49 +167,48 @@ def test_mobile_app_notify_action_is_configured():
         )
 
         action = "notify.mobile_app_iphone"
-
         ha.call_service(
             "input_text",
             "set_value",
             {"entity_id": NOTIFY_ACTION, "value": action},
         )
-
         ha.wait_for_state(NOTIFY_ACTION, action, timeout=2)
-        assert ha.state(NOTIFY_ACTION) == action
 
 
-def test_shop_alarm_can_select_all_modes():
+# ---------------------------------------------------------------------------
+# State-machine command interface
+# ---------------------------------------------------------------------------
+
+
+def test_direct_mode_edit_does_not_arm_system():
+    """Mode is status/target information, not the command API."""
     with HomeAssistantClient() as ha:
-        set_boolean(ha, TEST_MODE, True)
-        try:
-            for mode in ("Home", "Away", "Sleep", "Disarmed"):
-                set_mode(ha, mode)
-                assert ha.state(ALARM_MODE) == mode
-        finally:
-            set_mode(ha, "Disarmed")
-            set_boolean(ha, TEST_MODE, False)
+        reset_alarm(ha)
+        set_mode_directly(ha, "Away")
+        ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
+        assert ha.state(ALARM_STATE) == "Disarmed"
 
 
-def test_home_mode_ignores_virtual_door():
+def test_home_command_arms_home_immediately():
     with HomeAssistantClient() as ha:
         reset_alarm(ha)
         try:
-            set_mode(ha, "Home")
+            run_script(ha, REQUEST_HOME)
             ha.wait_for_state(ALARM_STATE, "Armed Home", timeout=2)
-            open_test_door(ha)
+            assert ha.state(ALARM_MODE) == "Home"
             assert ha.state(ALARM_TRIGGERED) == "off"
-            assert ha.state(ALARM_STATE) == "Armed Home"
         finally:
             reset_alarm(ha)
 
 
-def test_away_mode_has_exit_delay_then_arms():
+def test_away_command_has_exit_delay_then_arms():
     with HomeAssistantClient() as ha:
         reset_alarm(ha)
         set_boolean(ha, TEST_MODE, True)
         try:
-            set_mode(ha, "Away")
+            run_script(ha, REQUEST_AWAY)
             ha.wait_for_state(ALARM_STATE, "Exit Delay", timeout=2)
+            assert ha.state(ALARM_MODE) == "Away"
             ha.wait_for_state(ALARM_STATE, "Armed Away", timeout=3)
             assert ha.state(ALARM_TRIGGERED) == "off"
         finally:
@@ -181,13 +216,64 @@ def test_away_mode_has_exit_delay_then_arms():
             set_boolean(ha, TEST_MODE, False)
 
 
-def test_away_mode_virtual_door_runs_entry_delay_then_alarm():
+def test_sleep_command_has_exit_delay_then_arms():
     with HomeAssistantClient() as ha:
         reset_alarm(ha)
         set_boolean(ha, TEST_MODE, True)
         try:
-            set_mode(ha, "Away")
-            ha.wait_for_state(ALARM_STATE, "Armed Away", timeout=3)
+            run_script(ha, REQUEST_SLEEP)
+            ha.wait_for_state(ALARM_STATE, "Exit Delay", timeout=2)
+            assert ha.state(ALARM_MODE) == "Sleep"
+            ha.wait_for_state(ALARM_STATE, "Armed Sleep", timeout=3)
+            assert ha.state(ALARM_TRIGGERED) == "off"
+        finally:
+            reset_alarm(ha)
+            set_boolean(ha, TEST_MODE, False)
+
+
+def test_cancel_exit_delay_disarms_without_waiting_for_arm():
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            run_script(ha, REQUEST_AWAY)
+            ha.wait_for_state(ALARM_STATE, "Exit Delay", timeout=2)
+            run_script(ha, CANCEL_EXIT_DELAY)
+            ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
+            ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
+            assert ha.state(ALARM_TRIGGERED) == "off"
+        finally:
+            reset_alarm(ha)
+            set_boolean(ha, TEST_MODE, False)
+
+
+def test_new_arm_request_is_rejected_while_already_armed():
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        try:
+            arm_and_wait(ha, REQUEST_HOME, "Armed Home")
+            run_script(ha, REQUEST_AWAY)
+            # The authoritative state/mode must remain Home.
+            assert ha.state(ALARM_STATE) == "Armed Home"
+            assert ha.state(ALARM_MODE) == "Home"
+        finally:
+            reset_alarm(ha)
+
+
+# ---------------------------------------------------------------------------
+# Protected-door behavior: every armed mode uses Entry Delay
+# ---------------------------------------------------------------------------
+
+
+def _assert_armed_mode_door_runs_entry_delay_then_alarm(
+    request_script: str,
+    armed_state: str,
+):
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            arm_and_wait(ha, request_script, armed_state)
             open_test_door(ha)
             ha.wait_for_state(ALARM_STATE, "Entry Delay", timeout=2)
             ha.wait_for_state(ALARM_STATE, "Alarm", timeout=3)
@@ -195,6 +281,18 @@ def test_away_mode_virtual_door_runs_entry_delay_then_alarm():
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
+
+
+def test_home_door_runs_entry_delay_then_alarm():
+    _assert_armed_mode_door_runs_entry_delay_then_alarm(REQUEST_HOME, "Armed Home")
+
+
+def test_away_door_runs_entry_delay_then_alarm():
+    _assert_armed_mode_door_runs_entry_delay_then_alarm(REQUEST_AWAY, "Armed Away")
+
+
+def test_sleep_door_runs_entry_delay_then_alarm():
+    _assert_armed_mode_door_runs_entry_delay_then_alarm(REQUEST_SLEEP, "Armed Sleep")
 
 
 def test_disarm_during_entry_delay_prevents_alarm():
@@ -202,90 +300,118 @@ def test_disarm_during_entry_delay_prevents_alarm():
         reset_alarm(ha)
         set_boolean(ha, TEST_MODE, True)
         try:
-            set_mode(ha, "Sleep")
-            ha.wait_for_state(ALARM_STATE, "Armed Sleep", timeout=2)
+            arm_and_wait(ha, REQUEST_AWAY, "Armed Away")
             open_test_door(ha)
             ha.wait_for_state(ALARM_STATE, "Entry Delay", timeout=2)
-            set_mode(ha, "Disarmed")
+            run_script(ha, DISARM_SCRIPT)
             ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
+            ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
             ha.wait_for_state(ALARM_TRIGGERED, "off", timeout=2)
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
 
-def test_away_with_open_virtual_door_enters_fault():
+
+# ---------------------------------------------------------------------------
+# Readiness faults and explicit override
+# ---------------------------------------------------------------------------
+
+
+def test_away_with_open_virtual_door_stays_disarmed():
     with HomeAssistantClient() as ha:
         reset_alarm(ha)
         set_boolean(ha, TEST_MODE, True)
         try:
             open_test_door(ha)
-            set_mode(ha, "Away")
-            ha.wait_for_state(ALARM_STATE, "Fault", timeout=2)
-            assert ha.state(ALARM_MODE) == "Away"
-            assert ha.state(ALARM_TRIGGERED) == "off"
+            run_script(ha, REQUEST_AWAY)
+            ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
+            ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
             assert ha.state(TEST_DOOR) == "on"
+            assert ha.state(ALARM_TRIGGERED) == "off"
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
 
 
-def test_away_fault_can_be_overridden():
+def test_sleep_with_open_virtual_door_stays_disarmed():
     with HomeAssistantClient() as ha:
         reset_alarm(ha)
         set_boolean(ha, TEST_MODE, True)
         try:
             open_test_door(ha)
-            set_mode(ha, "Away")
-            ha.wait_for_state(ALARM_STATE, "Fault", timeout=2)
+            run_script(ha, REQUEST_SLEEP)
+            ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
+            ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
+        finally:
+            reset_alarm(ha)
+            set_boolean(ha, TEST_MODE, False)
 
-            ha.call_service(
-                "script",
-                "turn_on",
-                {"entity_id": AWAY_OVERRIDE_SCRIPT},
-            )
 
+def test_away_open_door_fault_can_be_overridden():
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            open_test_door(ha)
+            run_script(ha, OVERRIDE_AWAY)
             ha.wait_for_state(ALARM_STATE, "Exit Delay", timeout=2)
             ha.wait_for_state(ALARM_STATE, "Armed Away", timeout=3)
-
+            assert ha.state(ALARM_MODE) == "Away"
             assert ha.state(TEST_DOOR) == "on"
             assert ha.state(ALARM_TRIGGERED) == "off"
-            assert ha.state(AWAY_OVERRIDE) == "off"
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
 
 
-def test_overridden_away_door_reopen_runs_entry_delay_then_alarm():
+def test_simulated_unavailable_siren_blocks_normal_away():
     with HomeAssistantClient() as ha:
         reset_alarm(ha)
         set_boolean(ha, TEST_MODE, True)
         try:
-            open_test_door(ha)
-            set_mode(ha, "Away")
-            ha.wait_for_state(ALARM_STATE, "Fault", timeout=2)
-
-            ha.call_service(
-                "script",
-                "turn_on",
-                {"entity_id": AWAY_OVERRIDE_SCRIPT},
-            )
-
-            ha.wait_for_state(ALARM_STATE, "Armed Away", timeout=3)
-
-            close_test_door(ha)
-            open_test_door(ha)
-
-            ha.wait_for_state(ALARM_STATE, "Entry Delay", timeout=2)
-            ha.wait_for_state(ALARM_STATE, "Alarm", timeout=3)
-            assert ha.state(ALARM_TRIGGERED) == "on"
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, True)
+            ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
+            run_script(ha, REQUEST_AWAY)
+            ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
+            ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
 
 
-def clear_supervision_test_inputs(ha: HomeAssistantClient) -> None:
-    set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
-    set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, False)
+def test_simulated_unavailable_siren_override_away_still_arms():
+    """The arming state machine must not depend on commanding the siren relay."""
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, True)
+            ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
+            run_script(ha, OVERRIDE_AWAY)
+            ha.wait_for_state(ALARM_STATE, "Exit Delay", timeout=2)
+            ha.wait_for_state(ALARM_STATE, "Armed Away", timeout=3)
+            assert ha.state(ALARM_MODE) == "Away"
+        finally:
+            reset_alarm(ha)
+            set_boolean(ha, TEST_MODE, False)
+
+
+def test_simulated_unavailable_siren_override_home_still_arms():
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        try:
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, True)
+            ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
+            run_script(ha, OVERRIDE_HOME)
+            ha.wait_for_state(ALARM_STATE, "Armed Home", timeout=2)
+            assert ha.state(ALARM_MODE) == "Home"
+        finally:
+            reset_alarm(ha)
+
+
+# ---------------------------------------------------------------------------
+# Supervision / trouble entity
+# ---------------------------------------------------------------------------
 
 
 def test_system_trouble_entity_exists():
@@ -346,6 +472,11 @@ def test_system_trouble_stays_on_until_all_faults_clear():
             clear_supervision_test_inputs(ha)
 
 
+# ---------------------------------------------------------------------------
+# Water alarm regression tests retained from the existing suite
+# ---------------------------------------------------------------------------
+
+
 def test_water_alarm_entities_exist():
     with HomeAssistantClient() as ha:
         assert ha.state(WATER_SENSOR) in ("on", "off")
@@ -387,7 +518,6 @@ def test_water_alarm_enable_while_wet_triggers_immediately():
             assert ha.state(SIREN_RELAY) == "off"
 
             run_script(ha, WATER_ENABLE_SCRIPT)
-
             ha.wait_for_state(WATER_ENABLED, "on", timeout=2)
             ha.wait_for_state(WATER_ACTIVE, "on", timeout=2)
             ha.wait_for_state(SIREN_RELAY, "on", timeout=2)
@@ -426,18 +556,15 @@ def test_water_alarm_reset_requires_dry_sensor():
             ha.wait_for_state(SIREN_RELAY, "on", timeout=2)
 
             run_script(ha, WATER_RESET_SCRIPT)
-
             assert ha.state(WATER_TEST_WET) == "on"
             assert ha.state(WATER_ACTIVE) == "on"
             assert ha.state(SIREN_RELAY) == "on"
 
             set_test_water_wet(ha, False)
             run_script(ha, WATER_RESET_SCRIPT)
-
             ha.wait_for_state(WATER_ACTIVE, "off", timeout=2)
             ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
         finally:
             set_test_water_wet(ha, False)
             if ha.state(WATER_ACTIVE) == "on":
                 run_script(ha, WATER_RESET_SCRIPT)
-

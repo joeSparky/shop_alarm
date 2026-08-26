@@ -158,7 +158,7 @@ template:
             {% elif door == 'unknown' %}
               Front door sensor state unknown
             {% else %}
-              None
+              No trouble
             {% endif %}
 
   - binary_sensor:

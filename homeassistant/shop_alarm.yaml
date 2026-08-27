@@ -73,6 +73,11 @@ input_boolean:
     initial: false
     icon: mdi:alarm-light
 
+  shop_alarm_notifications_acknowledged:
+    name: Shop Alarm Notifications Acknowledged
+    initial: false
+    icon: mdi:message-check
+
   shop_alarm_test_door_open:
     name: Shop Alarm Test Door Open
     initial: false
@@ -442,6 +447,41 @@ script:
               entity_id: switch.shop_siren_relay
     mode: restart
 
+  shop_alarm_acknowledge_notifications:
+    alias: "Shop Alarm - Acknowledge Notifications"
+    description: "Stop repeated critical-alarm notifications until a new alarm event occurs."
+    sequence:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.shop_alarm_notifications_acknowledged
+    mode: restart
+
+  shop_alarm_send_active_alarm_reminder:
+    alias: "Shop Alarm - Send Active Alarm Reminder"
+    description: "Send one reminder when a critical alarm is active and has not been acknowledged."
+    sequence:
+      - condition: state
+        entity_id: input_boolean.shop_alarm_notifications_acknowledged
+        state: "off"
+      - condition: template
+        value_template: >-
+          {{ is_state('input_boolean.shop_alarm_triggered', 'on')
+             or is_state('input_boolean.shop_water_alarm_active', 'on') }}
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "SHOP ALARM REMINDER"
+          message: >-
+            {% set alarms = [] %}
+            {% if is_state('input_boolean.shop_alarm_triggered', 'on') %}
+              {% set alarms = alarms + ['Burglary alarm'] %}
+            {% endif %}
+            {% if is_state('input_boolean.shop_water_alarm_active', 'on') %}
+              {% set alarms = alarms + ['Water alarm'] %}
+            {% endif %}
+            {{ alarms | join(' and ') }} remains active.
+            Press ACKNOWLEDGE ALERTS on the Shop Alarm screen to stop reminders.
+    mode: single
+
   shop_alarm_request_home:
     alias: "Shop Alarm - Request Home"
     sequence:
@@ -529,6 +569,9 @@ script:
               {{ is_state('binary_sensor.water_detector', 'on')
                  or is_state('input_boolean.shop_water_alarm_test_wet', 'on') }}
         then:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.shop_alarm_notifications_acknowledged
           - action: input_boolean.turn_on
             target:
               entity_id: input_boolean.shop_water_alarm_active
@@ -794,6 +837,9 @@ automation:
       - action: input_boolean.turn_on
         target:
           entity_id: input_boolean.shop_alarm_triggered
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.shop_alarm_notifications_acknowledged
       - action: input_select.select_option
         target:
           entity_id: input_select.shop_alarm_state
@@ -808,6 +854,16 @@ automation:
           title: "SHOP ALARM"
           message: "Alarm triggered at the shop."
     mode: restart
+
+  - id: shop_alarm_repeat_active_alarm_notification
+    alias: "Shop Alarm - Repeat Active Alarm Notification"
+    description: "Repeat critical-alarm notifications every two minutes until acknowledged."
+    triggers:
+      - trigger: time_pattern
+        minutes: "/2"
+    actions:
+      - action: script.shop_alarm_send_active_alarm_reminder
+    mode: single
 
   - id: shop_alarm_siren_trouble_notification
     alias: "Shop Alarm - Siren Trouble Notification"
@@ -904,6 +960,9 @@ automation:
         entity_id: input_boolean.shop_water_alarm_enabled
         state: "on"
     actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.shop_alarm_notifications_acknowledged
       - action: input_boolean.turn_on
         target:
           entity_id: input_boolean.shop_water_alarm_active
@@ -941,4 +1000,3 @@ automation:
           title: "Shop water sensor dry"
           message: "Water sensor returned to dry. Water alarm remains latched until reset."
     mode: restart
-

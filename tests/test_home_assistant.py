@@ -8,6 +8,7 @@ ALARM_TRIGGERED = "input_boolean.shop_alarm_triggered"
 TEST_DOOR = "input_boolean.shop_alarm_test_door_open"
 TEST_MODE = "input_boolean.shop_alarm_test_mode"
 NOTIFY_ACTION = "input_text.shop_alarm_notify_action"
+NOTIFICATIONS_ACKNOWLEDGED = "input_boolean.shop_alarm_notifications_acknowledged"
 SIREN_RELAY = "switch.shop_siren_relay"
 SYSTEM_TROUBLE = "binary_sensor.shop_alarm_system_trouble"
 TEST_SIREN_UNAVAILABLE = "input_boolean.shop_alarm_test_siren_unavailable"
@@ -21,6 +22,7 @@ OVERRIDE_AWAY = "script.shop_alarm_override_away"
 OVERRIDE_SLEEP = "script.shop_alarm_override_sleep"
 DISARM_SCRIPT = "script.shop_alarm_disarm"
 CANCEL_EXIT_DELAY = "script.shop_alarm_cancel_exit_delay"
+ACKNOWLEDGE_NOTIFICATIONS = "script.shop_alarm_acknowledge_notifications"
 
 WATER_SENSOR = "binary_sensor.water_detector"
 WATER_ENABLED = "input_boolean.shop_water_alarm_enabled"
@@ -71,6 +73,7 @@ def reset_alarm(ha: HomeAssistantClient) -> None:
     ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
     ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
     ha.wait_for_state(ALARM_TRIGGERED, "off", timeout=2)
+    set_boolean(ha, NOTIFICATIONS_ACKNOWLEDGED, False)
 
 
 def arm_and_wait(ha: HomeAssistantClient, script: str, final_state: str) -> None:
@@ -97,6 +100,8 @@ def reset_water_alarm(ha: HomeAssistantClient) -> None:
 
     if ha.state(SIREN_RELAY) in ("on", "off"):
         ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
+
+    set_boolean(ha, NOTIFICATIONS_ACKNOWLEDGED, False)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +160,12 @@ def test_command_scripts_exist():
 def test_shop_alarm_notify_action_entity_exists():
     with HomeAssistantClient() as ha:
         assert isinstance(ha.state(NOTIFY_ACTION), str)
+
+
+def test_notification_acknowledgement_entities_exist():
+    with HomeAssistantClient() as ha:
+        assert ha.state(NOTIFICATIONS_ACKNOWLEDGED) in ("on", "off")
+        assert ha.state(ACKNOWLEDGE_NOTIFICATIONS) in ("on", "off")
 
 
 def test_mobile_app_notify_action_is_configured():
@@ -307,6 +318,63 @@ def test_disarm_during_entry_delay_prevents_alarm():
             ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
             ha.wait_for_state(ALARM_MODE, "Disarmed", timeout=2)
             ha.wait_for_state(ALARM_TRIGGERED, "off", timeout=2)
+        finally:
+            reset_alarm(ha)
+            set_boolean(ha, TEST_MODE, False)
+
+
+# ---------------------------------------------------------------------------
+# Repeating-notification acknowledgement
+# ---------------------------------------------------------------------------
+
+
+def test_acknowledge_notifications_script_sets_acknowledged():
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        try:
+            run_script(ha, ACKNOWLEDGE_NOTIFICATIONS)
+            ha.wait_for_state(NOTIFICATIONS_ACKNOWLEDGED, "on", timeout=2)
+        finally:
+            set_boolean(ha, NOTIFICATIONS_ACKNOWLEDGED, False)
+
+
+def test_new_door_alarm_clears_notification_acknowledgement():
+    """A new intrusion alarm must resume notifications after an earlier acknowledgement."""
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            arm_and_wait(ha, REQUEST_HOME, "Armed Home")
+            run_script(ha, ACKNOWLEDGE_NOTIFICATIONS)
+            ha.wait_for_state(NOTIFICATIONS_ACKNOWLEDGED, "on", timeout=2)
+
+            open_test_door(ha)
+            ha.wait_for_state(ALARM_STATE, "Entry Delay", timeout=2)
+            ha.wait_for_state(ALARM_STATE, "Alarm", timeout=3)
+            ha.wait_for_state(NOTIFICATIONS_ACKNOWLEDGED, "off", timeout=2)
+            assert ha.state(ALARM_TRIGGERED) == "on"
+        finally:
+            reset_alarm(ha)
+            set_boolean(ha, TEST_MODE, False)
+
+
+def test_acknowledging_door_alarm_does_not_clear_alarm_or_siren():
+    """Stop Notifications must silence repeats without disarming the alarm."""
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            arm_and_wait(ha, REQUEST_HOME, "Armed Home")
+            open_test_door(ha)
+            ha.wait_for_state(ALARM_STATE, "Alarm", timeout=3)
+            ha.wait_for_state(ALARM_TRIGGERED, "on", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "on", timeout=2)
+
+            run_script(ha, ACKNOWLEDGE_NOTIFICATIONS)
+            ha.wait_for_state(NOTIFICATIONS_ACKNOWLEDGED, "on", timeout=2)
+            assert ha.state(ALARM_STATE) == "Alarm"
+            assert ha.state(ALARM_TRIGGERED) == "on"
+            assert ha.state(SIREN_RELAY) == "on"
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
@@ -568,3 +636,49 @@ def test_water_alarm_reset_requires_dry_sensor():
             set_test_water_wet(ha, False)
             if ha.state(WATER_ACTIVE) == "on":
                 run_script(ha, WATER_RESET_SCRIPT)
+
+
+def test_new_water_alarm_clears_notification_acknowledgement():
+    """A new water alarm must resume notifications after an earlier acknowledgement."""
+    with HomeAssistantClient() as ha:
+        reset_water_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            run_script(ha, ACKNOWLEDGE_NOTIFICATIONS)
+            ha.wait_for_state(NOTIFICATIONS_ACKNOWLEDGED, "on", timeout=2)
+
+            set_test_water_wet(ha, True)
+            ha.wait_for_state(WATER_ACTIVE, "on", timeout=2)
+            ha.wait_for_state(NOTIFICATIONS_ACKNOWLEDGED, "off", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "on", timeout=2)
+        finally:
+            set_test_water_wet(ha, False)
+            if ha.state(WATER_ACTIVE) == "on":
+                run_script(ha, WATER_RESET_SCRIPT)
+                ha.wait_for_state(WATER_ACTIVE, "off", timeout=2)
+            set_boolean(ha, NOTIFICATIONS_ACKNOWLEDGED, False)
+            set_boolean(ha, TEST_MODE, False)
+
+
+def test_acknowledging_water_alarm_does_not_reset_water_alarm_or_siren():
+    """Stop Notifications must not reset the latched water alarm."""
+    with HomeAssistantClient() as ha:
+        reset_water_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            set_test_water_wet(ha, True)
+            ha.wait_for_state(WATER_ACTIVE, "on", timeout=2)
+            ha.wait_for_state(SIREN_RELAY, "on", timeout=2)
+
+            run_script(ha, ACKNOWLEDGE_NOTIFICATIONS)
+            ha.wait_for_state(NOTIFICATIONS_ACKNOWLEDGED, "on", timeout=2)
+            assert ha.state(WATER_ACTIVE) == "on"
+            assert ha.state(SIREN_RELAY) == "on"
+        finally:
+            set_test_water_wet(ha, False)
+            if ha.state(WATER_ACTIVE) == "on":
+                run_script(ha, WATER_RESET_SCRIPT)
+                ha.wait_for_state(WATER_ACTIVE, "off", timeout=2)
+                ha.wait_for_state(SIREN_RELAY, "off", timeout=2)
+            set_boolean(ha, NOTIFICATIONS_ACKNOWLEDGED, False)
+            set_boolean(ha, TEST_MODE, False)

@@ -1,0 +1,12 @@
+{
+  "domain": "gpio_inputs",
+  "name": "GPIO Inputs",
+  "version": "0.3.0",
+  "documentation": "https://www.home-assistant.io/",
+  "requirements": [
+    "gpiod==2.5.0"
+  ],
+  "codeowners": [],
+  "iot_class": "local_polling",
+  "config_flow": true
+}

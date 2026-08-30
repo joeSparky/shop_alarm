@@ -440,7 +440,7 @@ def test_package_rearms_only_after_all_notification_conditions_are_clear():
 def test_package_notification_status_uses_generic_notification_entities():
     text = package_text()
 
-    assert "name: Shop Notification Status" in text
+    assert "name: Notification Status" in text
     assert "label_id('Notification')" in text
     assert "entity.state in ['unavailable', 'unknown']" in text
 
@@ -481,8 +481,8 @@ def test_package_has_no_front_door_special_case():
 def test_package_readiness_uses_security_role_labels():
     text = package_text()
 
-    away_start = text.index("name: Shop Alarm Away Ready")
-    status_start = text.index("name: Shop Notification Status")
+    away_start = text.index("name: Alarm Away Ready")
+    status_start = text.index("name: Notification Status")
     ready_block = text[away_start:status_start]
 
     assert "label_id('Delayed Security')" in ready_block

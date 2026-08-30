@@ -1,4 +1,4 @@
-# Shop alarm package
+# Alarm package
 #
 # Deployment target on Home Assistant OS:
 #   /config/packages/shop_alarm.yaml
@@ -30,7 +30,7 @@
 # Notification-role sensors and system trouble.
 alarm_control_panel:
   - platform: manual
-    name: Shop Alarm Keypad
+    name: Alarm Keypad
     unique_id: shop_alarm_keypad
     code: !secret shop_alarm_pin
     code_arm_required: false
@@ -44,7 +44,7 @@ alarm_control_panel:
 
 input_select:
   shop_alarm_mode:
-    name: Shop Alarm Mode
+    name: Alarm Mode
     options:
       - Disarmed
       - Home
@@ -54,7 +54,7 @@ input_select:
     icon: mdi:shield-home
 
   shop_alarm_state:
-    name: Shop Alarm State
+    name: Alarm State
     options:
       - Disarmed
       - Armed Home
@@ -69,60 +69,60 @@ input_select:
 
 input_boolean:
   shop_alarm_triggered:
-    name: Shop Alarm Triggered
+    name: Alarm Triggered
     initial: false
     icon: mdi:alarm-light
 
   shop_alarm_notification_active:
-    name: Shop Alarm Notification Active
+    name: Alarm Notification Active
     initial: false
     icon: mdi:bell-alert
 
   shop_alarm_notifications_acknowledged:
-    name: Shop Alarm Notifications Acknowledged
+    name: Alarm Notifications Acknowledged
     initial: false
     icon: mdi:message-check
 
   shop_alarm_test_door_open:
-    name: Shop Alarm Test Door Open
+    name: Alarm Test Door Open
     initial: false
     icon: mdi:door-open
 
   shop_alarm_test_mode:
-    name: Shop Alarm Test Mode
+    name: Alarm Test Mode
     initial: false
     icon: mdi:test-tube
 
   shop_alarm_test_siren_unavailable:
-    name: Shop Alarm Test Siren Unavailable
+    name: Alarm Test Siren Unavailable
     initial: false
     icon: mdi:test-tube
 
   shop_alarm_test_security_sensor_unavailable:
-    name: Shop Alarm Test Security Sensor Unavailable
+    name: Alarm Test Security Sensor Unavailable
     initial: false
     icon: mdi:test-tube
 
   shop_alarm_fault_override:
-    name: Shop Alarm Fault Override
+    name: Alarm Fault Override
     initial: false
     icon: mdi:shield-alert
 
   # Retained for compatibility with the existing pytest suite and old UI.
   # New UI controls use shop_alarm_fault_override instead.
   shop_alarm_away_override:
-    name: Shop Alarm Away Override
+    name: Alarm Away Override
     initial: false
     icon: mdi:shield-alert
 
   shop_alarm_keypad_sync:
-    name: Shop Alarm Keypad Sync
+    name: Alarm Keypad Sync
     initial: false
     icon: mdi:sync
 
 template:
   - binary_sensor:
-      - name: Shop Alarm System Trouble
+      - name: Alarm System Trouble
         unique_id: shop_alarm_system_trouble
         device_class: problem
         state: >-
@@ -164,7 +164,7 @@ template:
             {{ ns.reasons | join('; ') if ns.reasons else 'No trouble' }}
 
   - binary_sensor:
-      - name: Shop Alarm Home Ready
+      - name: Alarm Home Ready
         unique_id: shop_alarm_home_ready
         device_class: running
         state: >-
@@ -177,7 +177,7 @@ template:
               None
             {% endif %}
 
-      - name: Shop Alarm Away Ready
+      - name: Alarm Away Ready
         unique_id: shop_alarm_away_ready
         device_class: running
         state: >-
@@ -212,7 +212,7 @@ template:
             {% endif %}
             {{ ns.reasons | join('; ') if ns.reasons else 'None' }}
 
-      - name: Shop Alarm Sleep Ready
+      - name: Alarm Sleep Ready
         unique_id: shop_alarm_sleep_ready
         device_class: running
         state: >-
@@ -248,7 +248,7 @@ template:
             {{ ns.reasons | join('; ') if ns.reasons else 'None' }}
 
   - sensor:
-      - name: Shop Notification Status
+      - name: Notification Status
         unique_id: shop_notification_status
         icon: mdi:bell-check
         state: >-
@@ -294,13 +294,13 @@ template:
 input_text:
 
   shop_alarm_notify_action:
-    name: Shop Alarm Notify Action
+    name: Alarm Notify Action
     max: 255
     icon: mdi:cellphone-message
 
 script:
   shop_alarm_send_notification:
-    alias: "Shop Alarm - Send Notification"
+    alias: "Alarm - Send Notification"
     description: "Send an audible mobile-app notification when a phone notify action is configured."
     fields:
       title:
@@ -334,13 +334,13 @@ script:
   # ---------------------------------------------------------------------------
 
   shop_alarm_set_status:
-    alias: "Shop Alarm - Set Status"
+    alias: "Alarm - Set Status"
     description: "Internal helper: update the displayed target mode and actual alarm state together."
     fields:
       mode:
         description: "Disarmed, Home, Away, or Sleep"
       state:
-        description: "Actual Shop Alarm State"
+        description: "Actual Alarm State"
     sequence:
       - action: input_select.select_option
         target:
@@ -356,7 +356,7 @@ script:
     max: 10
 
   shop_alarm_arm:
-    alias: "Shop Alarm - Arm"
+    alias: "Alarm - Arm"
     description: "Single authoritative arming routine for Home, Away, and Sleep."
     fields:
       requested_mode:
@@ -392,7 +392,7 @@ script:
           - condition: template
             value_template: "{{ mode_requested not in ['Home', 'Away', 'Sleep'] }}"
         then:
-          - stop: "Invalid shop alarm mode request"
+          - stop: "Invalid alarm mode request"
 
       # Only a disarmed system may begin a new arming cycle.
       - if:
@@ -401,7 +401,7 @@ script:
         then:
           - action: script.shop_alarm_send_notification
             data:
-              title: "Shop alarm"
+              title: "Alarm"
               message: "Arm {{ mode_requested }} ignored because the system is {{ current_state }}."
           - stop: "Arming request rejected because system is not Disarmed"
 
@@ -418,7 +418,7 @@ script:
               state: Disarmed
           - action: script.shop_alarm_send_notification
             data:
-              title: "Shop alarm cannot arm normally"
+              title: "Alarm cannot arm normally"
               message: >-
                 {{ mode_requested }}: {{ fault_reason }}.
                 Correct the problem or use {{ mode_requested | upper }} - OVERRIDE FAULT.
@@ -447,7 +447,7 @@ script:
             then:
               - action: script.shop_alarm_send_notification
                 data:
-                  title: "SHOP ALARM OVERRIDE"
+                  title: "ALARM OVERRIDE"
                   message: >-
                     Home arming override accepted.
                     Fault: {{ fault_reason if fault_reason | trim != '' else 'fault was manually overridden' }}.
@@ -465,14 +465,14 @@ script:
         then:
           - action: script.shop_alarm_send_notification
             data:
-              title: "SHOP ALARM OVERRIDE"
+              title: "ALARM OVERRIDE"
               message: >-
                 {{ mode_requested }} arming override accepted.
                 Fault: {{ fault_reason if fault_reason | trim != '' else 'fault was manually overridden' }}.
 
       - action: script.shop_alarm_send_notification
         data:
-          title: "Shop alarm"
+          title: "Alarm"
           message: "{{ mode_requested }} selected. Exit delay started."
 
       - delay:
@@ -502,7 +502,7 @@ script:
     max: 4
 
   shop_alarm_disarm:
-    alias: "Shop Alarm - Disarm"
+    alias: "Alarm - Disarm"
     description: "Authoritative burglary-alarm disarm routine. PIN authorization is handled by the caller/keypad."
     sequence:
       # State/mode are changed first so a slow or failed relay command can
@@ -522,7 +522,7 @@ script:
     mode: restart
 
   shop_alarm_acknowledge_notifications:
-    alias: "Shop Alarm - Acknowledge Notifications"
+    alias: "Alarm - Acknowledge Notifications"
     description: "Stop repeated critical-alarm notifications until a new alarm event occurs."
     sequence:
       - action: input_boolean.turn_on
@@ -534,7 +534,7 @@ script:
     mode: restart
 
   shop_alarm_send_active_alarm_reminder:
-    alias: "Shop Alarm - Send Active Alarm Reminder"
+    alias: "Alarm - Send Active Alarm Reminder"
     description: "Send one reminder when a critical alarm is active and has not been acknowledged."
     sequence:
       - condition: state
@@ -546,7 +546,7 @@ script:
              or is_state('input_boolean.shop_alarm_notification_active', 'on') }}
       - action: script.shop_alarm_send_notification
         data:
-          title: "SHOP ALARM REMINDER"
+          title: "ALARM REMINDER"
           message: >-
             {% set alarms = [] %}
             {% if is_state('input_boolean.shop_alarm_triggered', 'on') %}
@@ -556,11 +556,11 @@ script:
               {% set alarms = alarms + ['Notification condition'] %}
             {% endif %}
             {{ alarms | join(' and ') }} remains active.
-            Press Stop Notifications on the Shop Alarm screen to stop reminders.
+            Press Stop Notifications on the Alarm screen to stop reminders.
     mode: single
 
   shop_alarm_request_home:
-    alias: "Shop Alarm - Request Home"
+    alias: "Alarm - Request Home"
     sequence:
       - action: script.shop_alarm_arm
         data:
@@ -569,7 +569,7 @@ script:
     mode: restart
 
   shop_alarm_request_away:
-    alias: "Shop Alarm - Request Away"
+    alias: "Alarm - Request Away"
     sequence:
       - action: script.shop_alarm_arm
         data:
@@ -578,7 +578,7 @@ script:
     mode: restart
 
   shop_alarm_request_sleep:
-    alias: "Shop Alarm - Request Sleep"
+    alias: "Alarm - Request Sleep"
     sequence:
       - action: script.shop_alarm_arm
         data:
@@ -587,7 +587,7 @@ script:
     mode: restart
 
   shop_alarm_override_home:
-    alias: "Shop Alarm - Home Override Fault"
+    alias: "Alarm - Home Override Fault"
     sequence:
       - action: script.shop_alarm_arm
         data:
@@ -596,7 +596,7 @@ script:
     mode: restart
 
   shop_alarm_override_away:
-    alias: "Shop Alarm - Away Override Fault"
+    alias: "Alarm - Away Override Fault"
     sequence:
       - action: script.shop_alarm_arm
         data:
@@ -605,7 +605,7 @@ script:
     mode: restart
 
   shop_alarm_override_sleep:
-    alias: "Shop Alarm - Sleep Override Fault"
+    alias: "Alarm - Sleep Override Fault"
     sequence:
       - action: script.shop_alarm_arm
         data:
@@ -614,7 +614,7 @@ script:
     mode: restart
 
   shop_alarm_cancel_exit_delay:
-    alias: "Shop Alarm - Cancel Exit Delay"
+    alias: "Alarm - Cancel Exit Delay"
     description: "Cancel Exit Delay and return to Disarmed without requiring a PIN."
     sequence:
       - condition: state
@@ -626,7 +626,7 @@ script:
   # Compatibility name retained for older tests/UI.  It now uses the same
   # authoritative arming routine rather than manipulating helper booleans.
   shop_alarm_arm_away_anyway:
-    alias: "Shop Alarm - Arm Away Anyway"
+    alias: "Alarm - Arm Away Anyway"
     sequence:
       - action: script.shop_alarm_arm
         data:
@@ -639,7 +639,7 @@ script:
 automation:
 
   - id: shop_alarm_keypad_to_mode
-    alias: "Shop Alarm - Keypad Disarm"
+    alias: "Alarm - Keypad Disarm"
     description: "The keypad may disarm the system; dashboard buttons are the only arming commands."
     triggers:
       - trigger: state
@@ -656,8 +656,8 @@ automation:
     mode: restart
 
   - id: shop_alarm_state_to_keypad
-    alias: "Shop Alarm - State To Keypad"
-    description: "Make the native keypad display follow the authoritative shop alarm state, not merely the requested mode."
+    alias: "Alarm - State To Keypad"
+    description: "Make the native keypad display follow the authoritative alarm state, not merely the requested mode."
     triggers:
       - trigger: state
         entity_id: input_select.shop_alarm_state
@@ -759,7 +759,7 @@ automation:
     mode: restart
 
   - id: shop_alarm_mode_guard
-    alias: "Shop Alarm - Mode Guard"
+    alias: "Alarm - Mode Guard"
     description: "Keep the mode helper as status only; reject direct mode edits in stable alarm states."
     triggers:
       - trigger: state
@@ -820,7 +820,7 @@ automation:
     mode: restart
 
   - id: shop_alarm_door_entry_delay
-    alias: "Shop Alarm - Door Entry Delay"
+    alias: "Alarm - Door Entry Delay"
     description: "Start entry delay when any Delayed Security sensor, or the virtual test door, opens while protected."
     triggers:
       # Listen for state changes globally so newly paired/labeled sensors do not
@@ -859,8 +859,8 @@ automation:
           option: Entry Delay
       - action: script.shop_alarm_send_notification
         data:
-          title: "Shop alarm entry delay"
-          message: "Protected door opened. Disarm the shop alarm."
+          title: "Alarm entry delay"
+          message: "Protected door opened. Disarm the alarm."
       - delay:
           seconds: >-
             {{ 1 if is_state('input_boolean.shop_alarm_test_mode', 'on') else 30 }}
@@ -886,12 +886,12 @@ automation:
           entity_id: switch.shop_siren_relay
       - action: script.shop_alarm_send_notification
         data:
-          title: "SHOP ALARM"
-          message: "Alarm triggered at the shop."
+          title: "ALARM"
+          message: "Alarm triggered."
     mode: restart
 
   - id: shop_alarm_immediate_security
-    alias: "Shop Alarm - Immediate Security"
+    alias: "Alarm - Immediate Security"
     description: "Trigger the alarm immediately when any Immediate Security sensor becomes active while protected."
     triggers:
       # Listen globally so newly paired/labeled sensors require no YAML change.
@@ -930,12 +930,12 @@ automation:
           entity_id: switch.shop_siren_relay
       - action: script.shop_alarm_send_notification
         data:
-          title: "SHOP ALARM"
-          message: "Immediate-security sensor triggered the shop alarm."
+          title: "ALARM"
+          message: "Immediate-security sensor triggered the alarm."
     mode: restart
 
   - id: shop_alarm_notification_role
-    alias: "Shop Alarm - Notification Role"
+    alias: "Alarm - Notification Role"
     description: "Start one latched notification cycle when a Notification-role entity enters an abnormal state."
     triggers:
       # Listen globally so newly paired/labeled entities require no YAML change.
@@ -979,7 +979,7 @@ automation:
         then:
           - action: script.shop_alarm_send_notification
             data:
-              title: "Shop notification"
+              title: "Alarm notification"
               message: >-
                 {% set entity_id = trigger.event.data.entity_id %}
                 {% set friendly = state_attr(entity_id, 'friendly_name')
@@ -994,7 +994,7 @@ automation:
     max: 10
 
   - id: shop_alarm_notification_rearm
-    alias: "Shop Alarm - Notification Rearm"
+    alias: "Alarm - Notification Rearm"
     description: "Rearm notifications after Stop Notifications once all Notification-role sensors are normal."
     triggers:
       # Any state change can be the one that returns the last active
@@ -1043,7 +1043,7 @@ automation:
 
 
   - id: shop_alarm_repeat_active_alarm_notification
-    alias: "Shop Alarm - Repeat Active Alarm Notification"
+    alias: "Alarm - Repeat Active Alarm Notification"
     description: "Repeat critical-alarm notifications every two minutes until acknowledged."
     triggers:
       - trigger: time_pattern
@@ -1053,7 +1053,7 @@ automation:
     mode: single
 
   - id: shop_alarm_siren_trouble_notification
-    alias: "Shop Alarm - Siren Trouble Notification"
+    alias: "Alarm - Siren Trouble Notification"
     description: "Report when the siren relay becomes unavailable or its state becomes unknown."
     triggers:
       - trigger: state
@@ -1065,14 +1065,14 @@ automation:
     actions:
       - action: script.shop_alarm_send_notification
         data:
-          title: "SHOP ALARM TROUBLE"
+          title: "ALARM TROUBLE"
           message: >-
             Siren relay is {{ states('switch.shop_siren_relay') }}.
             The alarm system may be unable to sound the siren.
     mode: restart
 
   - id: shop_alarm_siren_trouble_restored
-    alias: "Shop Alarm - Siren Trouble Restored"
+    alias: "Alarm - Siren Trouble Restored"
     description: "Report when the siren relay returns after a trouble condition."
     triggers:
       - trigger: state
@@ -1088,12 +1088,12 @@ automation:
     actions:
       - action: script.shop_alarm_send_notification
         data:
-          title: "Shop alarm trouble cleared"
+          title: "Alarm trouble cleared"
           message: "Siren relay is available again."
     mode: restart
 
   - id: shop_alarm_security_sensor_trouble_notification
-    alias: "Shop Alarm - Security Sensor Trouble Notification"
+    alias: "Alarm - Security Sensor Trouble Notification"
     description: "Report when any security-role entity becomes unavailable or unknown."
     triggers:
       - trigger: event
@@ -1116,7 +1116,7 @@ automation:
     actions:
       - action: script.shop_alarm_send_notification
         data:
-          title: "SHOP ALARM TROUBLE"
+          title: "ALARM TROUBLE"
           message: >-
             {{ state_attr(trigger.event.data.entity_id, 'friendly_name')
                | default(trigger.event.data.entity_id, true) }}
@@ -1125,7 +1125,7 @@ automation:
     max: 10
 
   - id: shop_alarm_security_sensor_trouble_restored
-    alias: "Shop Alarm - Security Sensor Trouble Restored"
+    alias: "Alarm - Security Sensor Trouble Restored"
     description: "Report when a security-role entity returns after being unavailable or unknown."
     triggers:
       - trigger: event
@@ -1148,7 +1148,7 @@ automation:
     actions:
       - action: script.shop_alarm_send_notification
         data:
-          title: "Shop alarm trouble cleared"
+          title: "Alarm trouble cleared"
           message: >-
             {{ state_attr(trigger.event.data.entity_id, 'friendly_name')
                | default(trigger.event.data.entity_id, true) }}

@@ -15,10 +15,11 @@
 #
 # Arming fault handling:
 #   Home, Away, and Sleep refuse normal arming when a critical system trouble
-#   exists. Away and Sleep also refuse normal arming when any security-role
-#   sensor is active. A one-cycle fault override allows the operator to arm anyway
-#   after the fault is clearly displayed. Exit Delay can be cancelled without
-#   a PIN because the system has not armed yet.
+#   exists or when any security-role sensor is active. A one-cycle fault override
+#   allows the operator to arm anyway. A sensor already active at override-arm
+#   time is effectively bypassed until it returns to normal; its next activation
+#   is protected normally. Exit Delay can be cancelled without a PIN because
+#   the system has not armed yet.
 #
 # Pytest can enable test mode to shorten delays to one second. Test mode
 # also suppresses phone notifications so automated tests do not make noise.
@@ -160,14 +161,36 @@ template:
         unique_id: shop_alarm_home_ready
         device_class: running
         state: >-
-          {{ is_state('binary_sensor.shop_alarm_system_trouble', 'off') }}
+          {% set ns = namespace(active=false) %}
+          {% for entity in states.binary_sensor %}
+            {% set entity_labels = labels(entity.entity_id) %}
+            {% if entity.state == 'on'
+                  and (label_id('Delayed Security') in entity_labels
+                       or label_id('Immediate Security') in entity_labels) %}
+              {% set ns.active = true %}
+            {% endif %}
+          {% endfor %}
+          {{ is_state('binary_sensor.shop_alarm_system_trouble', 'off')
+             and not ns.active
+             and is_state('input_boolean.shop_alarm_test_door_open', 'off') }}
         attributes:
           fault_reason: >-
-            {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
-              {{ state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason') }}
-            {% else %}
-              None
+            {% set ns = namespace(reasons=[]) %}
+            {% for entity in states.binary_sensor %}
+              {% set entity_labels = labels(entity.entity_id) %}
+              {% if entity.state == 'on'
+                    and (label_id('Delayed Security') in entity_labels
+                         or label_id('Immediate Security') in entity_labels) %}
+                {% set ns.reasons = ns.reasons + [entity.name ~ ' is active'] %}
+              {% endif %}
+            {% endfor %}
+            {% if is_state('input_boolean.shop_alarm_test_door_open', 'on') %}
+              {% set ns.reasons = ns.reasons + ['Test security sensor is active'] %}
             {% endif %}
+            {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
+              {% set ns.reasons = ns.reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
+            {% endif %}
+            {{ ns.reasons | join('; ') if ns.reasons else 'None' }}
 
       - name: Alarm Away Ready
         unique_id: shop_alarm_away_ready
@@ -469,7 +492,7 @@ script:
           current_state: "{{ states('input_select.shop_alarm_state') }}"
           fault_reason: >-
             {% set ns = namespace(reasons=[]) %}
-            {% if requested_mode in ['Away', 'Sleep'] %}
+            {% if requested_mode in ['Home', 'Away', 'Sleep'] %}
               {% for entity in states.binary_sensor %}
                 {% set entity_labels = labels(entity.entity_id) %}
                 {% if entity.state == 'on'

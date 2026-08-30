@@ -1,4 +1,4 @@
-# ALARM PYTEST SUITE - GENERIC SENSOR ROLES - 37 TESTS
+# ALARM PYTEST SUITE - GENERIC SENSOR ROLES - 39 TESTS
 from pathlib import Path
 import time
 
@@ -6,8 +6,6 @@ import pytest
 
 from ha.client import HomeAssistantClient
 
-
-WATER_SENSOR = "binary_sensor.water_detector"
 
 ALARM_MODE = "input_select.shop_alarm_mode"
 ALARM_STATE = "input_select.shop_alarm_state"
@@ -157,12 +155,6 @@ def test_security_role_status_entities_exist():
     with HomeAssistantClient() as ha:
         assert isinstance(ha.state(IMMEDIATE_SECURITY_STATUS), str)
         assert isinstance(ha.state(DELAYED_SECURITY_STATUS), str)
-
-
-def test_water_is_now_only_a_regular_sensor():
-    """The physical water detector remains; old dedicated water helpers are gone."""
-    with HomeAssistantClient() as ha:
-        assert ha.state(WATER_SENSOR) in ("on", "off")
 
 
 def test_command_scripts_exist():
@@ -320,6 +312,54 @@ def test_disarm_during_entry_delay_prevents_alarm():
             run_script(ha, DISARM_SCRIPT)
             ha.wait_for_state(ALARM_STATE, "Disarmed", timeout=2)
             ha.wait_for_state(ALARM_TRIGGERED, "off", timeout=2)
+        finally:
+            reset_alarm(ha)
+            set_boolean(ha, TEST_MODE, False)
+
+
+@pytest.mark.parametrize(
+    ("override_script", "armed_state", "mode"),
+    [
+        (OVERRIDE_HOME, "Armed Home", "Home"),
+        (OVERRIDE_AWAY, "Armed Away", "Away"),
+        (OVERRIDE_SLEEP, "Armed Sleep", "Sleep"),
+    ],
+)
+def test_open_security_sensor_is_bypassed_until_it_closes(
+    override_script: str,
+    armed_state: str,
+    mode: str,
+):
+    """An open sensor may be override-armed, but becomes protected after closing."""
+    with HomeAssistantClient() as ha:
+        reset_alarm(ha)
+        set_boolean(ha, TEST_MODE, True)
+        try:
+            # Open while disarmed. A normal Away/Sleep request would be blocked.
+            open_test_door(ha)
+            assert ha.state(ALARM_STATE) == "Disarmed"
+
+            # Explicit override accepts the currently-open sensor.
+            arm_and_wait(ha, override_script, armed_state)
+            assert ha.state(ALARM_MODE) == mode
+            assert ha.state(ALARM_TRIGGERED) == "off"
+
+            # Remaining open must not create an alarm after arming.
+            time.sleep(0.5)
+            assert ha.state(ALARM_STATE) == armed_state
+            assert ha.state(ALARM_TRIGGERED) == "off"
+
+            # Closing the bypassed sensor rearms it automatically.
+            close_test_door(ha)
+            time.sleep(0.25)
+            assert ha.state(ALARM_STATE) == armed_state
+            assert ha.state(ALARM_TRIGGERED) == "off"
+
+            # The next opening is now a protected opening.
+            open_test_door(ha)
+            ha.wait_for_state(ALARM_STATE, "Entry Delay", timeout=2)
+            ha.wait_for_state(ALARM_STATE, "Alarm", timeout=3)
+            assert ha.state(ALARM_TRIGGERED) == "on"
         finally:
             reset_alarm(ha)
             set_boolean(ha, TEST_MODE, False)
@@ -491,13 +531,18 @@ def test_package_has_no_front_door_special_case():
 def test_package_readiness_uses_security_role_labels():
     text = package_text()
 
-    away_start = text.index("name: Alarm Away Ready")
+    home_start = text.index("name: Alarm Home Ready")
     status_start = text.index("name: Notification Status")
-    ready_block = text[away_start:status_start]
+    ready_block = text[home_start:status_start]
 
-    assert "label_id('Delayed Security')" in ready_block
-    assert "label_id('Immediate Security')" in ready_block
-    assert "entity.state == 'on'" in ready_block
+    # Home, Away, and Sleep all use the same security-role readiness rule.
+    assert ready_block.count("label_id('Delayed Security')") >= 3
+    assert ready_block.count("label_id('Immediate Security')") >= 3
+    assert ready_block.count("entity.state == 'on'") >= 3
+
+    # The authoritative arming routine must also treat an open security sensor
+    # as a readiness fault in every arm mode, not only Away/Sleep.
+    assert "requested_mode in ['Home', 'Away', 'Sleep']" in text
 
 
 def test_package_security_role_status_sensors_show_only_active_sensors():

@@ -1,3 +1,4 @@
+# SHOP ALARM PYTEST SUITE - GENERIC SENSOR ROLES - 29 TESTS
 from pathlib import Path
 
 import pytest
@@ -5,7 +6,6 @@ import pytest
 from ha.client import HomeAssistantClient
 
 
-FRONT_DOOR = "binary_sensor.shop_front_door_opening"
 WATER_SENSOR = "binary_sensor.water_detector"
 
 ALARM_MODE = "input_select.shop_alarm_mode"
@@ -15,7 +15,7 @@ ALARM_TRIGGERED = "input_boolean.shop_alarm_triggered"
 TEST_DOOR = "input_boolean.shop_alarm_test_door_open"
 TEST_MODE = "input_boolean.shop_alarm_test_mode"
 TEST_SIREN_UNAVAILABLE = "input_boolean.shop_alarm_test_siren_unavailable"
-TEST_FRONT_DOOR_UNAVAILABLE = "input_boolean.shop_alarm_test_front_door_unavailable"
+TEST_SECURITY_SENSOR_UNAVAILABLE = "input_boolean.shop_alarm_test_security_sensor_unavailable"
 
 NOTIFY_ACTION = "input_text.shop_alarm_notify_action"
 NOTIFICATION_ACTIVE = "input_boolean.shop_alarm_notification_active"
@@ -68,7 +68,7 @@ def open_test_door(ha: HomeAssistantClient) -> None:
 
 def clear_supervision_test_inputs(ha: HomeAssistantClient) -> None:
     set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
-    set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, False)
+    set_boolean(ha, TEST_SECURITY_SENSOR_UNAVAILABLE, False)
 
 
 def reset_notification_flags(ha: HomeAssistantClient) -> None:
@@ -126,7 +126,6 @@ def test_home_assistant_api_is_running():
 
 def test_core_alarm_entities_exist():
     with HomeAssistantClient() as ha:
-        assert ha.state(FRONT_DOOR) in ("on", "off")
         assert ha.state(ALARM_MODE) in ("Disarmed", "Home", "Away", "Sleep")
         assert ha.state(ALARM_STATE) in (
             "Disarmed",
@@ -463,6 +462,34 @@ def test_package_has_no_dedicated_water_alarm_logic():
     assert "shop_water_alarm_trigger" not in text
 
 
+def test_package_has_no_front_door_special_case():
+    """
+    Security behavior must come from Immediate Security / Delayed Security
+    labels, not from a hard-coded physical front-door entity.
+    """
+    text = package_text()
+
+    assert "binary_sensor.shop_front_door_opening" not in text
+    assert "shop_alarm_test_front_door_unavailable" not in text
+    assert "shop_alarm_front_door_trouble" not in text
+
+    assert "label_id('Delayed Security')" in text
+    assert "label_id('Immediate Security')" in text
+    assert "shop_alarm_test_security_sensor_unavailable" in text
+
+
+def test_package_readiness_uses_security_role_labels():
+    text = package_text()
+
+    away_start = text.index("name: Shop Alarm Away Ready")
+    status_start = text.index("name: Shop Notification Status")
+    ready_block = text[away_start:status_start]
+
+    assert "label_id('Delayed Security')" in ready_block
+    assert "label_id('Immediate Security')" in ready_block
+    assert "entity.state == 'on'" in ready_block
+
+
 # ---------------------------------------------------------------------------
 # Readiness / supervision smoke tests
 # ---------------------------------------------------------------------------
@@ -489,13 +516,13 @@ def test_system_trouble_stays_on_until_all_test_faults_clear():
         clear_supervision_test_inputs(ha)
         try:
             set_boolean(ha, TEST_SIREN_UNAVAILABLE, True)
-            set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, True)
+            set_boolean(ha, TEST_SECURITY_SENSOR_UNAVAILABLE, True)
             ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
 
             set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
             assert ha.state(SYSTEM_TROUBLE) == "on"
 
-            set_boolean(ha, TEST_FRONT_DOOR_UNAVAILABLE, False)
+            set_boolean(ha, TEST_SECURITY_SENSOR_UNAVAILABLE, False)
             ha.wait_for_state(SYSTEM_TROUBLE, "off", timeout=2)
         finally:
             clear_supervision_test_inputs(ha)

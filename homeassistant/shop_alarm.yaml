@@ -6,17 +6,17 @@
 # Alarm mode is status/target information written by the command scripts.
 # It is NOT an arming command and should not be changed directly by the UI.
 #   Disarmed - no door alarm
-#   Home     - front door is protected; opening it starts Entry Delay
-#   Away     - front door is protected after an exit delay
-#   Sleep    - front door is protected after an exit delay
+#   Home     - security-role sensors are protected
+#   Away     - security-role sensors are protected after an exit delay
+#   Sleep    - security-role sensors are protected after an exit delay
 #
 # Alarm state tracks the Ring-style progression:
 #   Disarmed -> Exit Delay -> Armed Away -> Entry Delay -> Alarm
 #
 # Arming fault handling:
 #   Home, Away, and Sleep refuse normal arming when a critical system trouble
-#   exists. Away and Sleep also refuse normal arming when the protected front
-#   door is open. A one-cycle fault override allows the operator to arm anyway
+#   exists. Away and Sleep also refuse normal arming when any security-role
+#   sensor is active. A one-cycle fault override allows the operator to arm anyway
 #   after the fault is clearly displayed. Exit Delay can be cancelled without
 #   a PIN because the system has not armed yet.
 #
@@ -98,8 +98,8 @@ input_boolean:
     initial: false
     icon: mdi:test-tube
 
-  shop_alarm_test_front_door_unavailable:
-    name: Shop Alarm Test Front Door Unavailable
+  shop_alarm_test_security_sensor_unavailable:
+    name: Shop Alarm Test Security Sensor Unavailable
     initial: false
     icon: mdi:test-tube
 
@@ -126,35 +126,42 @@ template:
         unique_id: shop_alarm_system_trouble
         device_class: problem
         state: >-
-          {{ states('switch.shop_siren_relay') in ['unavailable', 'unknown']
-             or states('binary_sensor.shop_front_door_opening') in ['unavailable', 'unknown']
-             or is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on')
-             or is_state('input_boolean.shop_alarm_test_front_door_unavailable', 'on') }}
+          {% set ns = namespace(trouble=false) %}
+          {% if states('switch.shop_siren_relay') in ['unavailable', 'unknown']
+                or is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on')
+                or is_state('input_boolean.shop_alarm_test_security_sensor_unavailable', 'on') %}
+            {% set ns.trouble = true %}
+          {% endif %}
+          {% for entity in states %}
+            {% set entity_labels = labels(entity.entity_id) %}
+            {% if (label_id('Delayed Security') in entity_labels
+                   or label_id('Immediate Security') in entity_labels)
+                  and entity.state in ['unavailable', 'unknown'] %}
+              {% set ns.trouble = true %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.trouble }}
         attributes:
           trouble_reason: >-
+            {% set ns = namespace(reasons=[]) %}
             {% set siren = states('switch.shop_siren_relay') %}
-            {% set door = states('binary_sensor.shop_front_door_opening') %}
-            {% set test_siren = is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on') %}
-            {% set test_door = is_state('input_boolean.shop_alarm_test_front_door_unavailable', 'on') %}
-            {% if test_siren and test_door %}
-              TEST: siren relay unavailable; front door sensor unavailable
-            {% elif test_siren %}
-              TEST: siren relay unavailable
-            {% elif test_door %}
-              TEST: front door sensor unavailable
-            {% elif siren in ['unavailable', 'unknown'] and door in ['unavailable', 'unknown'] %}
-              Siren relay {{ siren }}; front door sensor {{ door }}
-            {% elif siren == 'unavailable' %}
-              Siren relay unavailable
-            {% elif siren == 'unknown' %}
-              Siren relay state unknown
-            {% elif door == 'unavailable' %}
-              Front door sensor unavailable
-            {% elif door == 'unknown' %}
-              Front door sensor state unknown
-            {% else %}
-              No trouble
+            {% if is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on') %}
+              {% set ns.reasons = ns.reasons + ['TEST: siren relay unavailable'] %}
+            {% elif siren in ['unavailable', 'unknown'] %}
+              {% set ns.reasons = ns.reasons + ['Siren relay ' ~ siren] %}
             {% endif %}
+            {% if is_state('input_boolean.shop_alarm_test_security_sensor_unavailable', 'on') %}
+              {% set ns.reasons = ns.reasons + ['TEST: security sensor unavailable'] %}
+            {% endif %}
+            {% for entity in states %}
+              {% set entity_labels = labels(entity.entity_id) %}
+              {% if (label_id('Delayed Security') in entity_labels
+                     or label_id('Immediate Security') in entity_labels)
+                    and entity.state in ['unavailable', 'unknown'] %}
+                {% set ns.reasons = ns.reasons + [entity.name ~ ' ' ~ entity.state] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.reasons | join('; ') if ns.reasons else 'No trouble' }}
 
   - binary_sensor:
       - name: Shop Alarm Home Ready
@@ -174,39 +181,71 @@ template:
         unique_id: shop_alarm_away_ready
         device_class: running
         state: >-
+          {% set ns = namespace(active=false) %}
+          {% for entity in states.binary_sensor %}
+            {% set entity_labels = labels(entity.entity_id) %}
+            {% if entity.state == 'on'
+                  and (label_id('Delayed Security') in entity_labels
+                       or label_id('Immediate Security') in entity_labels) %}
+              {% set ns.active = true %}
+            {% endif %}
+          {% endfor %}
           {{ is_state('binary_sensor.shop_alarm_system_trouble', 'off')
-             and is_state('binary_sensor.shop_front_door_opening', 'off')
+             and not ns.active
              and is_state('input_boolean.shop_alarm_test_door_open', 'off') }}
         attributes:
           fault_reason: >-
-            {% set reasons = [] %}
-            {% if is_state('binary_sensor.shop_front_door_opening', 'on')
-                  or is_state('input_boolean.shop_alarm_test_door_open', 'on') %}
-              {% set reasons = reasons + ['Front door is open'] %}
+            {% set ns = namespace(reasons=[]) %}
+            {% for entity in states.binary_sensor %}
+              {% set entity_labels = labels(entity.entity_id) %}
+              {% if entity.state == 'on'
+                    and (label_id('Delayed Security') in entity_labels
+                         or label_id('Immediate Security') in entity_labels) %}
+                {% set ns.reasons = ns.reasons + [entity.name ~ ' is active'] %}
+              {% endif %}
+            {% endfor %}
+            {% if is_state('input_boolean.shop_alarm_test_door_open', 'on') %}
+              {% set ns.reasons = ns.reasons + ['Test security sensor is active'] %}
             {% endif %}
             {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
-              {% set reasons = reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
+              {% set ns.reasons = ns.reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
             {% endif %}
-            {{ reasons | join('; ') if reasons else 'None' }}
+            {{ ns.reasons | join('; ') if ns.reasons else 'None' }}
 
       - name: Shop Alarm Sleep Ready
         unique_id: shop_alarm_sleep_ready
         device_class: running
         state: >-
+          {% set ns = namespace(active=false) %}
+          {% for entity in states.binary_sensor %}
+            {% set entity_labels = labels(entity.entity_id) %}
+            {% if entity.state == 'on'
+                  and (label_id('Delayed Security') in entity_labels
+                       or label_id('Immediate Security') in entity_labels) %}
+              {% set ns.active = true %}
+            {% endif %}
+          {% endfor %}
           {{ is_state('binary_sensor.shop_alarm_system_trouble', 'off')
-             and is_state('binary_sensor.shop_front_door_opening', 'off')
+             and not ns.active
              and is_state('input_boolean.shop_alarm_test_door_open', 'off') }}
         attributes:
           fault_reason: >-
-            {% set reasons = [] %}
-            {% if is_state('binary_sensor.shop_front_door_opening', 'on')
-                  or is_state('input_boolean.shop_alarm_test_door_open', 'on') %}
-              {% set reasons = reasons + ['Front door is open'] %}
+            {% set ns = namespace(reasons=[]) %}
+            {% for entity in states.binary_sensor %}
+              {% set entity_labels = labels(entity.entity_id) %}
+              {% if entity.state == 'on'
+                    and (label_id('Delayed Security') in entity_labels
+                         or label_id('Immediate Security') in entity_labels) %}
+                {% set ns.reasons = ns.reasons + [entity.name ~ ' is active'] %}
+              {% endif %}
+            {% endfor %}
+            {% if is_state('input_boolean.shop_alarm_test_door_open', 'on') %}
+              {% set ns.reasons = ns.reasons + ['Test security sensor is active'] %}
             {% endif %}
             {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
-              {% set reasons = reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
+              {% set ns.reasons = ns.reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
             {% endif %}
-            {{ reasons | join('; ') if reasons else 'None' }}
+            {{ ns.reasons | join('; ') if ns.reasons else 'None' }}
 
   - sensor:
       - name: Shop Notification Status
@@ -251,23 +290,8 @@ template:
             {% endfor %}
             {{ ns.entities }}
 
-  # TEMPORARY diagnostic: prove that alarm sensors can be discovered by role label.
-  # Remove after the label-based design is verified.
-  - sensor:
-      - name: Shop Alarm Delayed Security Entities
-        unique_id: shop_alarm_delayed_security_entities
-        state: >-
-          {{ label_entities(label_id("Delayed Security")) | count }}
-        attributes:
-          entities: >-
-            {{ label_entities(label_id("Delayed Security")) | list }}
 
 input_text:
-  # TEMPORARY diagnostic: records the role seen when the front-door sensor changes.
-  shop_alarm_last_trigger_role:
-    name: Shop Alarm Last Trigger Role
-    max: 100
-    icon: mdi:tag
 
   shop_alarm_notify_action:
     name: Shop Alarm Notify Action
@@ -345,18 +369,24 @@ script:
           override_requested: "{{ override_fault | default(false) | bool }}"
           current_state: "{{ states('input_select.shop_alarm_state') }}"
           fault_reason: >-
-            {% set reasons = [] %}
-            {% if requested_mode in ['Away', 'Sleep']
-                  and (
-                    is_state('binary_sensor.shop_front_door_opening', 'on')
-                    or is_state('input_boolean.shop_alarm_test_door_open', 'on')
-                  ) %}
-              {% set reasons = reasons + ['Front door is open'] %}
+            {% set ns = namespace(reasons=[]) %}
+            {% if requested_mode in ['Away', 'Sleep'] %}
+              {% for entity in states.binary_sensor %}
+                {% set entity_labels = labels(entity.entity_id) %}
+                {% if entity.state == 'on'
+                      and (label_id('Delayed Security') in entity_labels
+                           or label_id('Immediate Security') in entity_labels) %}
+                  {% set ns.reasons = ns.reasons + [entity.name ~ ' is active'] %}
+                {% endif %}
+              {% endfor %}
+              {% if is_state('input_boolean.shop_alarm_test_door_open', 'on') %}
+                {% set ns.reasons = ns.reasons + ['Test security sensor is active'] %}
+              {% endif %}
             {% endif %}
             {% if is_state('binary_sensor.shop_alarm_system_trouble', 'on') %}
-              {% set reasons = reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
+              {% set ns.reasons = ns.reasons + [state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')] %}
             {% endif %}
-            {{ reasons | join('; ') }}
+            {{ ns.reasons | join('; ') }}
 
       - if:
           - condition: template
@@ -607,30 +637,6 @@ script:
 
 
 automation:
-  # TEMPORARY diagnostic: read the entity's CURRENT labels when the door changes.
-  - id: shop_alarm_live_role_test
-    alias: "Shop Alarm - Live Role Test"
-    description: "Record the current role label when the front-door opening entity changes state."
-    triggers:
-      - trigger: state
-        entity_id: binary_sensor.shop_front_door_opening
-    actions:
-      - action: input_text.set_value
-        target:
-          entity_id: input_text.shop_alarm_last_trigger_role
-        data:
-          value: >-
-            {% set entity_labels = labels(trigger.entity_id) %}
-            {% if label_id("Delayed Security") in entity_labels %}
-              Delayed Security
-            {% elif label_id("Immediate Security") in entity_labels %}
-              Immediate Security
-            {% elif label_id("Notification") in entity_labels %}
-              Notification
-            {% else %}
-              No Role
-            {% endif %}
-    mode: restart
 
   - id: shop_alarm_keypad_to_mode
     alias: "Shop Alarm - Keypad Disarm"
@@ -1086,44 +1092,66 @@ automation:
           message: "Siren relay is available again."
     mode: restart
 
-  - id: shop_alarm_front_door_trouble_notification
-    alias: "Shop Alarm - Front Door Trouble Notification"
-    description: "Report when the front door sensor becomes unavailable or its state becomes unknown."
+  - id: shop_alarm_security_sensor_trouble_notification
+    alias: "Shop Alarm - Security Sensor Trouble Notification"
+    description: "Report when any security-role entity becomes unavailable or unknown."
     triggers:
-      - trigger: state
-        entity_id: binary_sensor.shop_front_door_opening
-        to: "unavailable"
-      - trigger: state
-        entity_id: binary_sensor.shop_front_door_opening
-        to: "unknown"
+      - trigger: event
+        event_type: state_changed
+    conditions:
+      - condition: template
+        value_template: >-
+          {% set entity_id = trigger.event.data.entity_id | default('') %}
+          {% set old = trigger.event.data.old_state %}
+          {% set new = trigger.event.data.new_state %}
+          {% if not entity_id or old is none or new is none %}
+            false
+          {% else %}
+            {% set entity_labels = labels(entity_id) %}
+            {{ (label_id('Delayed Security') in entity_labels
+                or label_id('Immediate Security') in entity_labels)
+               and old.state not in ['unavailable', 'unknown']
+               and new.state in ['unavailable', 'unknown'] }}
+          {% endif %}
     actions:
       - action: script.shop_alarm_send_notification
         data:
           title: "SHOP ALARM TROUBLE"
           message: >-
-            Front door sensor is {{ states('binary_sensor.shop_front_door_opening') }}.
-            The alarm system may be unable to detect the front door opening.
-    mode: restart
+            {{ state_attr(trigger.event.data.entity_id, 'friendly_name')
+               | default(trigger.event.data.entity_id, true) }}
+            is {{ trigger.event.data.new_state.state }}.
+    mode: queued
+    max: 10
 
-  - id: shop_alarm_front_door_trouble_restored
-    alias: "Shop Alarm - Front Door Trouble Restored"
-    description: "Report when the front door sensor returns after a trouble condition."
+  - id: shop_alarm_security_sensor_trouble_restored
+    alias: "Shop Alarm - Security Sensor Trouble Restored"
+    description: "Report when a security-role entity returns after being unavailable or unknown."
     triggers:
-      - trigger: state
-        entity_id: binary_sensor.shop_front_door_opening
-        from: "unavailable"
-      - trigger: state
-        entity_id: binary_sensor.shop_front_door_opening
-        from: "unknown"
+      - trigger: event
+        event_type: state_changed
     conditions:
       - condition: template
         value_template: >-
-          {{ states('binary_sensor.shop_front_door_opening') in ['on', 'off'] }}
+          {% set entity_id = trigger.event.data.entity_id | default('') %}
+          {% set old = trigger.event.data.old_state %}
+          {% set new = trigger.event.data.new_state %}
+          {% if not entity_id or old is none or new is none %}
+            false
+          {% else %}
+            {% set entity_labels = labels(entity_id) %}
+            {{ (label_id('Delayed Security') in entity_labels
+                or label_id('Immediate Security') in entity_labels)
+               and old.state in ['unavailable', 'unknown']
+               and new.state not in ['unavailable', 'unknown'] }}
+          {% endif %}
     actions:
       - action: script.shop_alarm_send_notification
         data:
           title: "Shop alarm trouble cleared"
-          message: "Front door sensor is available again."
-    mode: restart
-
-
+          message: >-
+            {{ state_attr(trigger.event.data.entity_id, 'friendly_name')
+               | default(trigger.event.data.entity_id, true) }}
+            is available again.
+    mode: queued
+    max: 10

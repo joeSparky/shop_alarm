@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Alarm Configuration",
+        "description": "Create controls for assigning alarm-role labels to entities."
+      }
+    },
+    "abort": {
+      "already_configured": "Alarm Configuration is already configured."
+    }
+  }
+}

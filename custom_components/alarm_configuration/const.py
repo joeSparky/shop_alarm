@@ -1,0 +1,27 @@
+"""Constants for Alarm Configuration."""
+
+DOMAIN = "alarm_configuration"
+
+LABEL_DELAYED = "Delayed Security"
+LABEL_IMMEDIATE = "Immediate Security"
+LABEL_NOTIFICATION = "Notification"
+LABEL_TROUBLE = "Alarm System Trouble"
+
+MANAGED_LABEL_NAMES = (
+    LABEL_DELAYED,
+    LABEL_IMMEDIATE,
+    LABEL_NOTIFICATION,
+    LABEL_TROUBLE,
+)
+
+SECURITY_NONE = "None"
+SECURITY_DELAYED = LABEL_DELAYED
+SECURITY_IMMEDIATE = LABEL_IMMEDIATE
+
+SECURITY_OPTIONS = (
+    SECURITY_NONE,
+    SECURITY_DELAYED,
+    SECURITY_IMMEDIATE,
+)
+
+PLATFORMS = ("select", "switch", "button")

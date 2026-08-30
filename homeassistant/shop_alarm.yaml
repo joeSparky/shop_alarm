@@ -27,7 +27,7 @@
 # The PIN is stored separately in /config/secrets.yaml as shop_alarm_pin.
 # The keypad is synchronized for status/disarming only; dashboard scripts initiate arming.
 # Existing alarm logic remains authoritative for delays, faults, siren,
-# water alarm, and system trouble.
+# Notification-role sensors and system trouble.
 alarm_control_panel:
   - platform: manual
     name: Shop Alarm Keypad
@@ -73,6 +73,11 @@ input_boolean:
     initial: false
     icon: mdi:alarm-light
 
+  shop_alarm_notification_active:
+    name: Shop Alarm Notification Active
+    initial: false
+    icon: mdi:bell-alert
+
   shop_alarm_notifications_acknowledged:
     name: Shop Alarm Notifications Acknowledged
     initial: false
@@ -114,21 +119,6 @@ input_boolean:
     name: Shop Alarm Keypad Sync
     initial: false
     icon: mdi:sync
-
-  shop_water_alarm_enabled:
-    name: Shop Water Alarm Enabled
-    initial: true
-    icon: mdi:water-alert
-
-  shop_water_alarm_active:
-    name: Shop Water Alarm Active
-    initial: false
-    icon: mdi:water-alert
-
-  shop_water_alarm_test_wet:
-    name: Shop Water Alarm Test Wet
-    initial: false
-    icon: mdi:test-tube
 
 template:
   - binary_sensor:
@@ -218,7 +208,67 @@ template:
             {% endif %}
             {{ reasons | join('; ') if reasons else 'None' }}
 
+  - sensor:
+      - name: Shop Notification Status
+        unique_id: shop_notification_status
+        icon: mdi:bell-check
+        state: >-
+          {% set ns = namespace(names=[]) %}
+          {% for entity in states %}
+            {% set is_notification = label_id('Notification') in labels(entity.entity_id) %}
+            {% set is_problem = (entity.domain == 'binary_sensor' and entity.state == 'on')
+                                 or entity.state in ['unavailable', 'unknown'] %}
+            {% if is_notification and is_problem %}
+              {% set ns.names = ns.names + [entity.name] %}
+            {% endif %}
+          {% endfor %}
+          {% if ns.names | count == 0 %}
+            No Active Notifications
+          {% else %}
+            {{ ns.names | join(', ') }}
+          {% endif %}
+        attributes:
+          active_count: >-
+            {% set ns = namespace(count=0) %}
+            {% for entity in states %}
+              {% set is_notification = label_id('Notification') in labels(entity.entity_id) %}
+              {% set is_problem = (entity.domain == 'binary_sensor' and entity.state == 'on')
+                                   or entity.state in ['unavailable', 'unknown'] %}
+              {% if is_notification and is_problem %}
+                {% set ns.count = ns.count + 1 %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.count }}
+          active_entities: >-
+            {% set ns = namespace(entities=[]) %}
+            {% for entity in states %}
+              {% set is_notification = label_id('Notification') in labels(entity.entity_id) %}
+              {% set is_problem = (entity.domain == 'binary_sensor' and entity.state == 'on')
+                                   or entity.state in ['unavailable', 'unknown'] %}
+              {% if is_notification and is_problem %}
+                {% set ns.entities = ns.entities + [entity.entity_id] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.entities }}
+
+  # TEMPORARY diagnostic: prove that alarm sensors can be discovered by role label.
+  # Remove after the label-based design is verified.
+  - sensor:
+      - name: Shop Alarm Delayed Security Entities
+        unique_id: shop_alarm_delayed_security_entities
+        state: >-
+          {{ label_entities(label_id("Delayed Security")) | count }}
+        attributes:
+          entities: >-
+            {{ label_entities(label_id("Delayed Security")) | list }}
+
 input_text:
+  # TEMPORARY diagnostic: records the role seen when the front-door sensor changes.
+  shop_alarm_last_trigger_role:
+    name: Shop Alarm Last Trigger Role
+    max: 100
+    icon: mdi:tag
+
   shop_alarm_notify_action:
     name: Shop Alarm Notify Action
     max: 255
@@ -435,16 +485,10 @@ script:
         target:
           entity_id: input_boolean.shop_alarm_triggered
 
-      # Do not silence an independent active water alarm.
-      - if:
-          - condition: state
-            entity_id: input_boolean.shop_water_alarm_active
-            state: "off"
-        then:
-          - action: switch.turn_off
-            continue_on_error: true
-            target:
-              entity_id: switch.shop_siren_relay
+      - action: switch.turn_off
+        continue_on_error: true
+        target:
+          entity_id: switch.shop_siren_relay
     mode: restart
 
   shop_alarm_acknowledge_notifications:
@@ -454,6 +498,9 @@ script:
       - action: input_boolean.turn_on
         target:
           entity_id: input_boolean.shop_alarm_notifications_acknowledged
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.shop_alarm_notification_active
     mode: restart
 
   shop_alarm_send_active_alarm_reminder:
@@ -466,7 +513,7 @@ script:
       - condition: template
         value_template: >-
           {{ is_state('input_boolean.shop_alarm_triggered', 'on')
-             or is_state('input_boolean.shop_water_alarm_active', 'on') }}
+             or is_state('input_boolean.shop_alarm_notification_active', 'on') }}
       - action: script.shop_alarm_send_notification
         data:
           title: "SHOP ALARM REMINDER"
@@ -475,11 +522,11 @@ script:
             {% if is_state('input_boolean.shop_alarm_triggered', 'on') %}
               {% set alarms = alarms + ['Burglary alarm'] %}
             {% endif %}
-            {% if is_state('input_boolean.shop_water_alarm_active', 'on') %}
-              {% set alarms = alarms + ['Water alarm'] %}
+            {% if is_state('input_boolean.shop_alarm_notification_active', 'on') %}
+              {% set alarms = alarms + ['Notification condition'] %}
             {% endif %}
             {{ alarms | join(' and ') }} remains active.
-            Press ACKNOWLEDGE ALERTS on the Shop Alarm screen to stop reminders.
+            Press Stop Notifications on the Shop Alarm screen to stop reminders.
     mode: single
 
   shop_alarm_request_home:
@@ -557,70 +604,34 @@ script:
           override_fault: true
     mode: restart
 
-  shop_water_alarm_enable:
-    alias: "Shop Water Alarm - Enable"
-    sequence:
-      - action: input_boolean.turn_on
-        target:
-          entity_id: input_boolean.shop_water_alarm_enabled
-      - if:
-          - condition: template
-            value_template: >-
-              {{ is_state('binary_sensor.water_detector', 'on')
-                 or is_state('input_boolean.shop_water_alarm_test_wet', 'on') }}
-        then:
-          - action: input_boolean.turn_off
-            target:
-              entity_id: input_boolean.shop_alarm_notifications_acknowledged
-          - action: input_boolean.turn_on
-            target:
-              entity_id: input_boolean.shop_water_alarm_active
-          - action: switch.turn_on
-            continue_on_error: true
-            target:
-              entity_id: switch.shop_siren_relay
-          - action: script.shop_alarm_send_notification
-            data:
-              title: "SHOP WATER ALARM"
-              message: "Water alarm enabled while the water sensor is active."
-
-  shop_water_alarm_disable:
-    alias: "Shop Water Alarm - Disable"
-    sequence:
-      - action: input_boolean.turn_off
-        target:
-          entity_id:
-            - input_boolean.shop_water_alarm_enabled
-            - input_boolean.shop_water_alarm_active
-      - action: switch.turn_off
-        continue_on_error: true
-        target:
-          entity_id: switch.shop_siren_relay
-
-
-  shop_water_alarm_reset:
-    alias: "Shop Water Alarm - Reset"
-    description: "Clear a latched water alarm only after both real and virtual water inputs are dry."
-    sequence:
-      - condition: template
-        value_template: >-
-          {{ is_state('binary_sensor.water_detector', 'off')
-             and is_state('input_boolean.shop_water_alarm_test_wet', 'off') }}
-      - action: input_boolean.turn_off
-        target:
-          entity_id: input_boolean.shop_water_alarm_active
-      - action: switch.turn_off
-        continue_on_error: true
-        target:
-          entity_id: switch.shop_siren_relay
-      - action: script.shop_alarm_send_notification
-        data:
-          title: "Shop water alarm reset"
-          message: "Water alarm was reset after the sensor returned to dry."
-    mode: single
 
 
 automation:
+  # TEMPORARY diagnostic: read the entity's CURRENT labels when the door changes.
+  - id: shop_alarm_live_role_test
+    alias: "Shop Alarm - Live Role Test"
+    description: "Record the current role label when the front-door opening entity changes state."
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.shop_front_door_opening
+    actions:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.shop_alarm_last_trigger_role
+        data:
+          value: >-
+            {% set entity_labels = labels(trigger.entity_id) %}
+            {% if label_id("Delayed Security") in entity_labels %}
+              Delayed Security
+            {% elif label_id("Immediate Security") in entity_labels %}
+              Immediate Security
+            {% elif label_id("Notification") in entity_labels %}
+              Notification
+            {% else %}
+              No Role
+            {% endif %}
+    mode: restart
+
   - id: shop_alarm_keypad_to_mode
     alias: "Shop Alarm - Keypad Disarm"
     description: "The keypad may disarm the system; dashboard buttons are the only arming commands."
@@ -804,18 +815,36 @@ automation:
 
   - id: shop_alarm_door_entry_delay
     alias: "Shop Alarm - Door Entry Delay"
-    description: "Start entry delay when the real or virtual door opens while protected."
+    description: "Start entry delay when any Delayed Security sensor, or the virtual test door, opens while protected."
     triggers:
-      - trigger: state
-        entity_id: binary_sensor.shop_front_door_opening
-        to: "on"
+      # Listen for state changes globally so newly paired/labeled sensors do not
+      # require an automation/YAML change or a Home Assistant restart.
+      - trigger: event
+        event_type: state_changed
+        id: real_sensor
       - trigger: state
         entity_id: input_boolean.shop_alarm_test_door_open
         to: "on"
+        id: virtual_test
     conditions:
       - condition: template
         value_template: >-
           {{ states('input_select.shop_alarm_state') in ['Armed Home', 'Armed Away', 'Armed Sleep'] }}
+      - condition: template
+        value_template: >-
+          {% if trigger.id == 'virtual_test' %}
+            true
+          {% else %}
+            {% set entity_id = trigger.event.data.entity_id | default('') %}
+            {% set old = trigger.event.data.old_state %}
+            {% set new = trigger.event.data.new_state %}
+            {{ entity_id.startswith('binary_sensor.')
+               and old is not none
+               and new is not none
+               and old.state != 'on'
+               and new.state == 'on'
+               and label_id('Delayed Security') in labels(entity_id) }}
+          {% endif %}
     actions:
       - action: input_select.select_option
         target:
@@ -854,6 +883,158 @@ automation:
           title: "SHOP ALARM"
           message: "Alarm triggered at the shop."
     mode: restart
+
+  - id: shop_alarm_immediate_security
+    alias: "Shop Alarm - Immediate Security"
+    description: "Trigger the alarm immediately when any Immediate Security sensor becomes active while protected."
+    triggers:
+      # Listen globally so newly paired/labeled sensors require no YAML change.
+      - trigger: event
+        event_type: state_changed
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ states('input_select.shop_alarm_state') in ['Armed Home', 'Armed Away', 'Armed Sleep'] }}
+      - condition: template
+        value_template: >-
+          {% set entity_id = trigger.event.data.entity_id | default('') %}
+          {% set old = trigger.event.data.old_state %}
+          {% set new = trigger.event.data.new_state %}
+          {{ entity_id.startswith('binary_sensor.')
+             and old is not none
+             and new is not none
+             and old.state != 'on'
+             and new.state == 'on'
+             and label_id('Immediate Security') in labels(entity_id) }}
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.shop_alarm_triggered
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.shop_alarm_notifications_acknowledged
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.shop_alarm_state
+        data:
+          option: Alarm
+      - action: switch.turn_on
+        continue_on_error: true
+        target:
+          entity_id: switch.shop_siren_relay
+      - action: script.shop_alarm_send_notification
+        data:
+          title: "SHOP ALARM"
+          message: "Immediate-security sensor triggered the shop alarm."
+    mode: restart
+
+  - id: shop_alarm_notification_role
+    alias: "Shop Alarm - Notification Role"
+    description: "Start one latched notification cycle when a Notification-role entity enters an abnormal state."
+    triggers:
+      # Listen globally so newly paired/labeled entities require no YAML change.
+      - trigger: event
+        event_type: state_changed
+    conditions:
+      - condition: template
+        value_template: >-
+          {% set entity_id = trigger.event.data.entity_id | default('') %}
+          {% set old = trigger.event.data.old_state %}
+          {% set new = trigger.event.data.new_state %}
+          {% if not entity_id or old is none or new is none %}
+            false
+          {% else %}
+            {% set is_notification = label_id('Notification') in labels(entity_id) %}
+            {% set domain = entity_id.split('.')[0] %}
+            {% set old_problem = (domain == 'binary_sensor' and old.state == 'on')
+                                 or old.state in ['unavailable', 'unknown'] %}
+            {% set new_problem = (domain == 'binary_sensor' and new.state == 'on')
+                                 or new.state in ['unavailable', 'unknown'] %}
+            {{ is_notification and (not old_problem) and new_problem }}
+          {% endif %}
+      # After Stop Notifications, ignore further activations until every
+      # Notification-role entity has returned to normal at least once.
+      - condition: state
+        entity_id: input_boolean.shop_alarm_notifications_acknowledged
+        state: "off"
+    actions:
+      - variables:
+          notification_cycle_was_active: >-
+            {{ is_state('input_boolean.shop_alarm_notification_active', 'on') }}
+
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.shop_alarm_notification_active
+
+      # Only the first abnormal condition of a cycle gets the immediate notification.
+      - if:
+          - condition: template
+            value_template: "{{ not notification_cycle_was_active }}"
+        then:
+          - action: script.shop_alarm_send_notification
+            data:
+              title: "Shop notification"
+              message: >-
+                {% set entity_id = trigger.event.data.entity_id %}
+                {% set friendly = state_attr(entity_id, 'friendly_name')
+                                  | default(entity_id, true) %}
+                {% set state = trigger.event.data.new_state.state %}
+                {% if state in ['unavailable', 'unknown'] %}
+                  {{ friendly }} is {{ state }}.
+                {% else %}
+                  {{ friendly }} became active.
+                {% endif %}
+    mode: queued
+    max: 10
+
+  - id: shop_alarm_notification_rearm
+    alias: "Shop Alarm - Notification Rearm"
+    description: "Rearm notifications after Stop Notifications once all Notification-role sensors are normal."
+    triggers:
+      # Any state change can be the one that returns the last active
+      # Notification-role sensor to normal.
+      - trigger: event
+        event_type: state_changed
+    conditions:
+      - condition: state
+        entity_id: input_boolean.shop_alarm_notifications_acknowledged
+        state: "on"
+      - condition: template
+        value_template: >-
+          {% set entity_id = trigger.event.data.entity_id | default('') %}
+          {% set old = trigger.event.data.old_state %}
+          {% set new = trigger.event.data.new_state %}
+          {% if not entity_id or old is none or new is none %}
+            false
+          {% else %}
+            {% set is_notification = label_id('Notification') in labels(entity_id) %}
+            {% set domain = entity_id.split('.')[0] %}
+            {% set old_problem = (domain == 'binary_sensor' and old.state == 'on')
+                                 or old.state in ['unavailable', 'unknown'] %}
+            {% set new_problem = (domain == 'binary_sensor' and new.state == 'on')
+                                 or new.state in ['unavailable', 'unknown'] %}
+            {{ is_notification and old_problem and (not new_problem) }}
+          {% endif %}
+      - condition: template
+        value_template: >-
+          {% set ns = namespace(any_active=false) %}
+          {% for entity in states %}
+            {% set is_notification = label_id('Notification') in labels(entity.entity_id) %}
+            {% set is_problem = (entity.domain == 'binary_sensor' and entity.state == 'on')
+                                 or entity.state in ['unavailable', 'unknown'] %}
+            {% if is_notification and is_problem %}
+              {% set ns.any_active = true %}
+            {% endif %}
+          {% endfor %}
+          {{ not ns.any_active }}
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.shop_alarm_notifications_acknowledged
+            - input_boolean.shop_alarm_notification_active
+    mode: restart
+
 
   - id: shop_alarm_repeat_active_alarm_notification
     alias: "Shop Alarm - Repeat Active Alarm Notification"
@@ -945,58 +1126,4 @@ automation:
           message: "Front door sensor is available again."
     mode: restart
 
-  - id: shop_water_alarm_trigger
-    alias: "Shop Water Alarm - Trigger"
-    description: "Trigger immediately when water contact closes while the water alarm is enabled."
-    triggers:
-      - trigger: state
-        entity_id: binary_sensor.water_detector
-        to: "on"
-      - trigger: state
-        entity_id: input_boolean.shop_water_alarm_test_wet
-        to: "on"
-    conditions:
-      - condition: state
-        entity_id: input_boolean.shop_water_alarm_enabled
-        state: "on"
-    actions:
-      - action: input_boolean.turn_off
-        target:
-          entity_id: input_boolean.shop_alarm_notifications_acknowledged
-      - action: input_boolean.turn_on
-        target:
-          entity_id: input_boolean.shop_water_alarm_active
-      - action: switch.turn_on
-        continue_on_error: true
-        target:
-          entity_id: switch.shop_siren_relay
-      - action: script.shop_alarm_send_notification
-        data:
-          title: "SHOP WATER ALARM"
-          message: "Water detected at the shop."
-    mode: restart
 
-  - id: shop_water_alarm_sensor_dry
-    alias: "Shop Water Alarm - Sensor Dry"
-    description: "Report that the sensor is dry, but keep an active water alarm latched until reset."
-    triggers:
-      - trigger: state
-        entity_id: binary_sensor.water_detector
-        to: "off"
-      - trigger: state
-        entity_id: input_boolean.shop_water_alarm_test_wet
-        to: "off"
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ is_state('binary_sensor.water_detector', 'off')
-             and is_state('input_boolean.shop_water_alarm_test_wet', 'off') }}
-      - condition: state
-        entity_id: input_boolean.shop_water_alarm_active
-        state: "on"
-    actions:
-      - action: script.shop_alarm_send_notification
-        data:
-          title: "Shop water sensor dry"
-          message: "Water sensor returned to dry. Water alarm remains latched until reset."
-    mode: restart

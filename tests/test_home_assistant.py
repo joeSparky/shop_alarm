@@ -1,4 +1,4 @@
-# SHOP ALARM PYTEST SUITE - GENERIC SENSOR ROLES - 29 TESTS
+# ALARM PYTEST SUITE - GENERIC SENSOR ROLES - 31 TESTS
 from pathlib import Path
 
 import pytest
@@ -21,6 +21,8 @@ NOTIFY_ACTION = "input_text.shop_alarm_notify_action"
 NOTIFICATION_ACTIVE = "input_boolean.shop_alarm_notification_active"
 NOTIFICATIONS_ACKNOWLEDGED = "input_boolean.shop_alarm_notifications_acknowledged"
 NOTIFICATION_STATUS = "sensor.shop_notification_status"
+IMMEDIATE_SECURITY_STATUS = "sensor.immediate_security"
+DELAYED_SECURITY_STATUS = "sensor.delayed_security"
 
 SIREN_RELAY = "switch.shop_siren_relay"
 SYSTEM_TROUBLE = "binary_sensor.shop_alarm_system_trouble"
@@ -147,6 +149,12 @@ def test_notification_entities_exist():
         assert ha.state(NOTIFICATIONS_ACKNOWLEDGED) in ("on", "off")
         assert isinstance(ha.state(NOTIFICATION_STATUS), str)
         assert ha.state(ACKNOWLEDGE_NOTIFICATIONS) in ("on", "off")
+
+
+def test_security_role_status_entities_exist():
+    with HomeAssistantClient() as ha:
+        assert isinstance(ha.state(IMMEDIATE_SECURITY_STATUS), str)
+        assert isinstance(ha.state(DELAYED_SECURITY_STATUS), str)
 
 
 def test_water_is_now_only_a_regular_sensor():
@@ -488,6 +496,32 @@ def test_package_readiness_uses_security_role_labels():
     assert "label_id('Delayed Security')" in ready_block
     assert "label_id('Immediate Security')" in ready_block
     assert "entity.state == 'on'" in ready_block
+
+
+def test_package_security_role_status_sensors_show_only_active_sensors():
+    text = package_text()
+
+    immediate_start = text.index("name: Immediate Security")
+    delayed_start = text.index("name: Delayed Security")
+    input_text_start = text.index("input_text:")
+    immediate_block = text[immediate_start:delayed_start]
+    delayed_block = text[delayed_start:input_text_start]
+
+    assert "unique_id: alarm_immediate_security_status" in immediate_block
+    assert "label_id('Immediate Security')" in immediate_block
+    assert "states.binary_sensor" in immediate_block
+    assert "entity.state == 'on'" in immediate_block
+    assert "None Active" in immediate_block
+    assert "active_count:" in immediate_block
+    assert "active_entities:" in immediate_block
+
+    assert "unique_id: alarm_delayed_security_status" in delayed_block
+    assert "label_id('Delayed Security')" in delayed_block
+    assert "states.binary_sensor" in delayed_block
+    assert "entity.state == 'on'" in delayed_block
+    assert "None Active" in delayed_block
+    assert "active_count:" in delayed_block
+    assert "active_entities:" in delayed_block
 
 
 # ---------------------------------------------------------------------------

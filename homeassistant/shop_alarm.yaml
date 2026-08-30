@@ -291,6 +291,71 @@ template:
             {{ ns.entities }}
 
 
+      - name: Immediate Security
+        unique_id: alarm_immediate_security_status
+        icon: mdi:shield-alert
+        state: >-
+          {% set ns = namespace(names=[]) %}
+          {% for entity in states.binary_sensor %}
+            {% if entity.state == 'on'
+                  and label_id('Immediate Security') in labels(entity.entity_id) %}
+              {% set ns.names = ns.names + [entity.name] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.names | sort | join(', ') if ns.names else 'None Active' }}
+        attributes:
+          active_count: >-
+            {% set ns = namespace(count=0) %}
+            {% for entity in states.binary_sensor %}
+              {% if entity.state == 'on'
+                    and label_id('Immediate Security') in labels(entity.entity_id) %}
+                {% set ns.count = ns.count + 1 %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.count }}
+          active_entities: >-
+            {% set ns = namespace(entities=[]) %}
+            {% for entity in states.binary_sensor %}
+              {% if entity.state == 'on'
+                    and label_id('Immediate Security') in labels(entity.entity_id) %}
+                {% set ns.entities = ns.entities + [entity.entity_id] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.entities | sort }}
+
+      - name: Delayed Security
+        unique_id: alarm_delayed_security_status
+        icon: mdi:shield-clock
+        state: >-
+          {% set ns = namespace(names=[]) %}
+          {% for entity in states.binary_sensor %}
+            {% if entity.state == 'on'
+                  and label_id('Delayed Security') in labels(entity.entity_id) %}
+              {% set ns.names = ns.names + [entity.name] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.names | sort | join(', ') if ns.names else 'None Active' }}
+        attributes:
+          active_count: >-
+            {% set ns = namespace(count=0) %}
+            {% for entity in states.binary_sensor %}
+              {% if entity.state == 'on'
+                    and label_id('Delayed Security') in labels(entity.entity_id) %}
+                {% set ns.count = ns.count + 1 %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.count }}
+          active_entities: >-
+            {% set ns = namespace(entities=[]) %}
+            {% for entity in states.binary_sensor %}
+              {% if entity.state == 'on'
+                    and label_id('Delayed Security') in labels(entity.entity_id) %}
+                {% set ns.entities = ns.entities + [entity.entity_id] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.entities | sort }}
+
+
 input_text:
 
   shop_alarm_notify_action:

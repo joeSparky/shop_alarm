@@ -127,15 +127,12 @@ template:
         device_class: problem
         state: >-
           {% set ns = namespace(trouble=false) %}
-          {% if states('switch.shop_siren_relay') in ['unavailable', 'unknown']
-                or is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on')
+          {% if is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on')
                 or is_state('input_boolean.shop_alarm_test_security_sensor_unavailable', 'on') %}
             {% set ns.trouble = true %}
           {% endif %}
           {% for entity in states %}
-            {% set entity_labels = labels(entity.entity_id) %}
-            {% if (label_id('Delayed Security') in entity_labels
-                   or label_id('Immediate Security') in entity_labels)
+            {% if label_id('Alarm System Trouble') in labels(entity.entity_id)
                   and entity.state in ['unavailable', 'unknown'] %}
               {% set ns.trouble = true %}
             {% endif %}
@@ -144,19 +141,14 @@ template:
         attributes:
           trouble_reason: >-
             {% set ns = namespace(reasons=[]) %}
-            {% set siren = states('switch.shop_siren_relay') %}
             {% if is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on') %}
-              {% set ns.reasons = ns.reasons + ['TEST: siren relay unavailable'] %}
-            {% elif siren in ['unavailable', 'unknown'] %}
-              {% set ns.reasons = ns.reasons + ['Siren relay ' ~ siren] %}
+              {% set ns.reasons = ns.reasons + ['Shop Siren Relay unavailable'] %}
             {% endif %}
             {% if is_state('input_boolean.shop_alarm_test_security_sensor_unavailable', 'on') %}
               {% set ns.reasons = ns.reasons + ['TEST: security sensor unavailable'] %}
             {% endif %}
             {% for entity in states %}
-              {% set entity_labels = labels(entity.entity_id) %}
-              {% if (label_id('Delayed Security') in entity_labels
-                     or label_id('Immediate Security') in entity_labels)
+              {% if label_id('Alarm System Trouble') in labels(entity.entity_id)
                     and entity.state in ['unavailable', 'unknown'] %}
                 {% set ns.reasons = ns.reasons + [entity.name ~ ' ' ~ entity.state] %}
               {% endif %}
@@ -248,6 +240,48 @@ template:
             {{ ns.reasons | join('; ') if ns.reasons else 'None' }}
 
   - sensor:
+      - name: Alarm System Trouble Status
+        unique_id: alarm_system_trouble_status
+        icon: mdi:alert-circle-check
+        state: >-
+          {% if is_state('binary_sensor.shop_alarm_system_trouble', 'off') %}
+            No Trouble
+          {% else %}
+            {{ state_attr('binary_sensor.shop_alarm_system_trouble', 'trouble_reason')
+               | default('Trouble', true) }}
+          {% endif %}
+        attributes:
+          active_count: >-
+            {% set ns = namespace(count=0) %}
+            {% if is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on') %}
+              {% set ns.count = ns.count + 1 %}
+            {% endif %}
+            {% if is_state('input_boolean.shop_alarm_test_security_sensor_unavailable', 'on') %}
+              {% set ns.count = ns.count + 1 %}
+            {% endif %}
+            {% for entity in states %}
+              {% if label_id('Alarm System Trouble') in labels(entity.entity_id)
+                    and entity.state in ['unavailable', 'unknown'] %}
+                {% set ns.count = ns.count + 1 %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.count }}
+          active_entities: >-
+            {% set ns = namespace(entities=[]) %}
+            {% if is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on') %}
+              {% set ns.entities = ns.entities + ['switch.shop_siren_relay'] %}
+            {% endif %}
+            {% if is_state('input_boolean.shop_alarm_test_security_sensor_unavailable', 'on') %}
+              {% set ns.entities = ns.entities + ['TEST: security sensor'] %}
+            {% endif %}
+            {% for entity in states %}
+              {% if label_id('Alarm System Trouble') in labels(entity.entity_id)
+                    and entity.state in ['unavailable', 'unknown'] %}
+                {% set ns.entities = ns.entities + [entity.entity_id] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.entities | sort }}
+
       - name: Notification Status
         unique_id: shop_notification_status
         icon: mdi:bell-check
@@ -1116,107 +1150,3 @@ automation:
     actions:
       - action: script.shop_alarm_send_active_alarm_reminder
     mode: single
-
-  - id: shop_alarm_siren_trouble_notification
-    alias: "Alarm - Siren Trouble Notification"
-    description: "Report when the siren relay becomes unavailable or its state becomes unknown."
-    triggers:
-      - trigger: state
-        entity_id: switch.shop_siren_relay
-        to: "unavailable"
-      - trigger: state
-        entity_id: switch.shop_siren_relay
-        to: "unknown"
-    actions:
-      - action: script.shop_alarm_send_notification
-        data:
-          title: "ALARM TROUBLE"
-          message: >-
-            Siren relay is {{ states('switch.shop_siren_relay') }}.
-            The alarm system may be unable to sound the siren.
-    mode: restart
-
-  - id: shop_alarm_siren_trouble_restored
-    alias: "Alarm - Siren Trouble Restored"
-    description: "Report when the siren relay returns after a trouble condition."
-    triggers:
-      - trigger: state
-        entity_id: switch.shop_siren_relay
-        from: "unavailable"
-      - trigger: state
-        entity_id: switch.shop_siren_relay
-        from: "unknown"
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ states('switch.shop_siren_relay') in ['on', 'off'] }}
-    actions:
-      - action: script.shop_alarm_send_notification
-        data:
-          title: "Alarm trouble cleared"
-          message: "Siren relay is available again."
-    mode: restart
-
-  - id: shop_alarm_security_sensor_trouble_notification
-    alias: "Alarm - Security Sensor Trouble Notification"
-    description: "Report when any security-role entity becomes unavailable or unknown."
-    triggers:
-      - trigger: event
-        event_type: state_changed
-    conditions:
-      - condition: template
-        value_template: >-
-          {% set entity_id = trigger.event.data.entity_id | default('') %}
-          {% set old = trigger.event.data.old_state %}
-          {% set new = trigger.event.data.new_state %}
-          {% if not entity_id or old is none or new is none %}
-            false
-          {% else %}
-            {% set entity_labels = labels(entity_id) %}
-            {{ (label_id('Delayed Security') in entity_labels
-                or label_id('Immediate Security') in entity_labels)
-               and old.state not in ['unavailable', 'unknown']
-               and new.state in ['unavailable', 'unknown'] }}
-          {% endif %}
-    actions:
-      - action: script.shop_alarm_send_notification
-        data:
-          title: "ALARM TROUBLE"
-          message: >-
-            {{ state_attr(trigger.event.data.entity_id, 'friendly_name')
-               | default(trigger.event.data.entity_id, true) }}
-            is {{ trigger.event.data.new_state.state }}.
-    mode: queued
-    max: 10
-
-  - id: shop_alarm_security_sensor_trouble_restored
-    alias: "Alarm - Security Sensor Trouble Restored"
-    description: "Report when a security-role entity returns after being unavailable or unknown."
-    triggers:
-      - trigger: event
-        event_type: state_changed
-    conditions:
-      - condition: template
-        value_template: >-
-          {% set entity_id = trigger.event.data.entity_id | default('') %}
-          {% set old = trigger.event.data.old_state %}
-          {% set new = trigger.event.data.new_state %}
-          {% if not entity_id or old is none or new is none %}
-            false
-          {% else %}
-            {% set entity_labels = labels(entity_id) %}
-            {{ (label_id('Delayed Security') in entity_labels
-                or label_id('Immediate Security') in entity_labels)
-               and old.state in ['unavailable', 'unknown']
-               and new.state not in ['unavailable', 'unknown'] }}
-          {% endif %}
-    actions:
-      - action: script.shop_alarm_send_notification
-        data:
-          title: "Alarm trouble cleared"
-          message: >-
-            {{ state_attr(trigger.event.data.entity_id, 'friendly_name')
-               | default(trigger.event.data.entity_id, true) }}
-            is available again.
-    mode: queued
-    max: 10

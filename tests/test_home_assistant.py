@@ -1,5 +1,6 @@
-# ALARM PYTEST SUITE - GENERIC SENSOR ROLES - 31 TESTS
+# ALARM PYTEST SUITE - GENERIC SENSOR ROLES - 37 TESTS
 from pathlib import Path
+import time
 
 import pytest
 
@@ -26,6 +27,7 @@ DELAYED_SECURITY_STATUS = "sensor.delayed_security"
 
 SIREN_RELAY = "switch.shop_siren_relay"
 SYSTEM_TROUBLE = "binary_sensor.shop_alarm_system_trouble"
+SYSTEM_TROUBLE_STATUS = "sensor.alarm_system_trouble_status"
 
 REQUEST_HOME = "script.shop_alarm_request_home"
 REQUEST_AWAY = "script.shop_alarm_request_away"
@@ -524,6 +526,63 @@ def test_package_security_role_status_sensors_show_only_active_sensors():
     assert "active_entities:" in delayed_block
 
 
+def test_package_system_trouble_uses_dedicated_label():
+    """Actual system-trouble supervision comes only from its dedicated label."""
+    text = package_text()
+
+    trouble_start = text.index("- name: Alarm System Trouble")
+    home_ready_start = text.index("- name: Alarm Home Ready")
+    trouble_block = text[trouble_start:home_ready_start]
+
+    assert "label_id('Alarm System Trouble')" in trouble_block
+    assert "states('switch.shop_siren_relay')" not in trouble_block
+    assert "label_id('Delayed Security')" not in trouble_block
+    assert "label_id('Immediate Security')" not in trouble_block
+
+
+def test_package_has_no_special_trouble_notification_automations():
+    """System-health supervision must not bypass the generic Notification role."""
+    text = package_text()
+
+    assert "shop_alarm_siren_trouble_notification" not in text
+    assert "shop_alarm_siren_trouble_restored" not in text
+    assert "shop_alarm_security_sensor_trouble_notification" not in text
+    assert "shop_alarm_security_sensor_trouble_restored" not in text
+
+
+def test_system_trouble_and_notification_labels_are_independent():
+    text = package_text()
+
+    trouble_start = text.index("- name: Alarm System Trouble")
+    home_ready_start = text.index("- name: Alarm Home Ready")
+    trouble_block = text[trouble_start:home_ready_start]
+
+    notification_start = text.index("id: shop_alarm_notification_role")
+    notification_rearm_start = text.index("id: shop_alarm_notification_rearm")
+    notification_block = text[notification_start:notification_rearm_start]
+
+    assert "label_id('Notification')" not in trouble_block
+    assert "label_id('Alarm System Trouble')" not in notification_block
+
+
+def test_package_has_system_trouble_status_sensor_for_dashboard():
+    """Dashboard status mirrors system trouble while the binary sensor remains authoritative."""
+    text = package_text()
+
+    status_start = text.index("- name: Alarm System Trouble Status")
+    notification_start = text.index("- name: Notification Status")
+    status_block = text[status_start:notification_start]
+
+    assert "unique_id: alarm_system_trouble_status" in status_block
+    assert "binary_sensor.shop_alarm_system_trouble" in status_block
+    assert "No Trouble" in status_block
+    assert "trouble_reason" in status_block
+    assert "active_count:" in status_block
+    assert "active_entities:" in status_block
+    assert "switch.shop_siren_relay" in status_block
+    assert "Shop Siren Relay unavailable" in text
+
+
 # ---------------------------------------------------------------------------
 # Readiness / supervision smoke tests
 # ---------------------------------------------------------------------------
@@ -534,12 +593,53 @@ def test_system_trouble_entity_exists():
         assert ha.state(SYSTEM_TROUBLE) in ("on", "off")
 
 
+def test_system_trouble_status_entity_exists_and_matches_trouble_state():
+    with HomeAssistantClient() as ha:
+        status = ha.state(SYSTEM_TROUBLE_STATUS)
+        assert isinstance(status, str)
+        assert status != ""
+        if ha.state(SYSTEM_TROUBLE) == "off":
+            assert status == "No Trouble"
+
+
 def test_simulated_unavailable_siren_causes_system_trouble():
     with HomeAssistantClient() as ha:
         clear_supervision_test_inputs(ha)
         try:
             set_boolean(ha, TEST_SIREN_UNAVAILABLE, True)
             ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
+        finally:
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
+            ha.wait_for_state(SYSTEM_TROUBLE, "off", timeout=2)
+
+
+def test_simulated_siren_unavailable_appears_in_system_trouble_status():
+    """Exercise the siren trouble path without changing the real Zigbee entity state."""
+    with HomeAssistantClient() as ha:
+        clear_supervision_test_inputs(ha)
+
+        if ha.state(SYSTEM_TROUBLE) != "off":
+            pytest.skip("System already has a real trouble condition; cannot isolate this test.")
+
+        try:
+            set_boolean(ha, TEST_SIREN_UNAVAILABLE, True)
+            ha.wait_for_state(SYSTEM_TROUBLE, "on", timeout=2)
+
+            deadline = time.monotonic() + 2
+            while True:
+                status = ha.get_state(SYSTEM_TROUBLE_STATUS)
+                active_entities = status.get("attributes", {}).get("active_entities", [])
+                if SIREN_RELAY in active_entities:
+                    break
+                if time.monotonic() >= deadline:
+                    pytest.fail(
+                        f"{SIREN_RELAY} did not appear in "
+                        f"{SYSTEM_TROUBLE_STATUS} active_entities; got {active_entities!r}"
+                    )
+                time.sleep(0.1)
+
+            assert "siren" in status["state"].lower()
+            assert "unavailable" in status["state"].lower()
         finally:
             set_boolean(ha, TEST_SIREN_UNAVAILABLE, False)
             ha.wait_for_state(SYSTEM_TROUBLE, "off", timeout=2)

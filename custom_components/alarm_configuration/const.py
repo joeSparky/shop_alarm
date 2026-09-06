@@ -6,12 +6,16 @@ LABEL_DELAYED = "Delayed Security"
 LABEL_IMMEDIATE = "Immediate Security"
 LABEL_NOTIFICATION = "Notification"
 LABEL_TROUBLE = "Alarm System Trouble"
+LABEL_CHIME_OPEN = "Chime on Open"
+LABEL_CHIME_CLOSE = "Chime on Close"
 
 MANAGED_LABEL_NAMES = (
     LABEL_DELAYED,
     LABEL_IMMEDIATE,
     LABEL_NOTIFICATION,
     LABEL_TROUBLE,
+    LABEL_CHIME_OPEN,
+    LABEL_CHIME_CLOSE,
 )
 
 SECURITY_NONE = "None"

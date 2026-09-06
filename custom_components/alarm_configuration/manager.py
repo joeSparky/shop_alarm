@@ -14,6 +14,8 @@ from .const import (
     LABEL_IMMEDIATE,
     LABEL_NOTIFICATION,
     LABEL_TROUBLE,
+    LABEL_CHIME_OPEN,
+    LABEL_CHIME_CLOSE,
     MANAGED_LABEL_NAMES,
     SECURITY_DELAYED,
     SECURITY_IMMEDIATE,
@@ -30,6 +32,8 @@ class AlarmConfigurationManager:
         self.security_role = SECURITY_NONE
         self.notification = False
         self.system_trouble = False
+        self.chime_on_open = False
+        self.chime_on_close = False
         self.status = "Select an entity"
         self._listeners: list[Callable[[], None]] = []
         self._option_to_entity: dict[str, str] = {}
@@ -50,7 +54,7 @@ class AlarmConfigurationManager:
             listener()
 
     def ensure_labels(self) -> None:
-        """Create the four managed labels if they do not already exist."""
+        """Create the managed labels if they do not already exist."""
         registry = lr.async_get(self.hass)
         for name in MANAGED_LABEL_NAMES:
             if registry.async_get_label_by_name(name) is None:
@@ -64,76 +68,18 @@ class AlarmConfigurationManager:
         return label.label_id
 
     def refresh_candidates(self) -> list[str]:
-        """Build a useful display-name list for configurable alarm devices."""
+        """Put every binary_sensor and switch entity in the configuration list."""
         registry = er.async_get(self.hass)
         candidates: list[tuple[str, str]] = []
 
-        managed_label_ids = {
-            self._label_id(name) for name in MANAGED_LABEL_NAMES
-        }
-
-        # Binary-sensor classes that commonly make sense for alarm/security
-        # inputs.  This intentionally removes infrastructure/status sensors
-        # such as connectivity, battery, running, and update entities.
-        alarm_binary_device_classes = {
-            "carbon_monoxide",
-            "door",
-            "gas",
-            "garage_door",
-            "lock",
-            "moisture",
-            "motion",
-            "occupancy",
-            "opening",
-            "presence",
-            "problem",
-            "safety",
-            "smoke",
-            "tamper",
-            "vibration",
-            "window",
-        }
-
         for entry in registry.entities.values():
             entity_id = entry.entity_id
+
+            # Keep discovery deliberately simple: every binary_sensor and
+            # every switch is available for alarm configuration.
             domain = entity_id.split(".", 1)[0]
-
-            if entry.platform == DOMAIN:
+            if domain not in ("binary_sensor", "switch"):
                 continue
-
-            labels = set(entry.labels)
-            already_managed = bool(labels & managed_label_ids)
-
-            # Never hide an entity that is already participating in the alarm,
-            # even if its domain/device class is unusual.
-            if not already_managed:
-                if domain == "binary_sensor":
-                    # Package/template status entities are not physical alarm
-                    # devices and should not appear in Device Configuration.
-                    if entry.platform == "template":
-                        continue
-
-                    state = self.hass.states.get(entity_id)
-                    device_class = None
-                    if state is not None:
-                        device_class = state.attributes.get("device_class")
-
-                    # GPIO contact inputs may intentionally have no device class.
-                    if (
-                        device_class not in alarm_binary_device_classes
-                        and not (
-                            device_class is None
-                            and entry.platform == "gpio_inputs"
-                        )
-                    ):
-                        continue
-
-                elif domain == "switch":
-                    # Keep switches available because relay outputs such as a
-                    # siren relay can participate in System Trouble monitoring.
-                    pass
-                else:
-                    continue
 
             state = self.hass.states.get(entity_id)
             if state is not None:
@@ -149,7 +95,7 @@ class AlarmConfigurationManager:
 
         candidates.sort(key=lambda item: (item[0].casefold(), item[1]))
 
-        # Friendly names are allowed to repeat, so always include the entity ID.
+        # Friendly names can repeat, so always show the entity ID too.
         self._option_to_entity = {
             f"{friendly} — {entity_id}": entity_id
             for friendly, entity_id in candidates
@@ -163,7 +109,7 @@ class AlarmConfigurationManager:
             if self.selected_entity_id:
                 self.load_selected()
             else:
-                self.status = "No configurable alarm devices found"
+                self.status = "No binary sensors found"
 
         self._notify()
         return list(self._option_to_entity)
@@ -204,6 +150,8 @@ class AlarmConfigurationManager:
         immediate_id = self._label_id(LABEL_IMMEDIATE)
         notification_id = self._label_id(LABEL_NOTIFICATION)
         trouble_id = self._label_id(LABEL_TROUBLE)
+        chime_open_id = self._label_id(LABEL_CHIME_OPEN)
+        chime_close_id = self._label_id(LABEL_CHIME_CLOSE)
 
         if immediate_id in labels:
             self.security_role = SECURITY_IMMEDIATE
@@ -214,6 +162,8 @@ class AlarmConfigurationManager:
 
         self.notification = notification_id in labels
         self.system_trouble = trouble_id in labels
+        self.chime_on_open = chime_open_id in labels
+        self.chime_on_close = chime_close_id in labels
         self.status = f"Loaded {self.selected_entity_id}"
         self._notify()
 
@@ -229,6 +179,14 @@ class AlarmConfigurationManager:
 
     def set_system_trouble(self, enabled: bool) -> None:
         self.system_trouble = enabled
+        self._notify()
+
+    def set_chime_on_open(self, enabled: bool) -> None:
+        self.chime_on_open = enabled
+        self._notify()
+
+    def set_chime_on_close(self, enabled: bool) -> None:
+        self.chime_on_close = enabled
         self._notify()
 
     def apply(self) -> None:
@@ -249,6 +207,8 @@ class AlarmConfigurationManager:
         immediate_id = self._label_id(LABEL_IMMEDIATE)
         notification_id = self._label_id(LABEL_NOTIFICATION)
         trouble_id = self._label_id(LABEL_TROUBLE)
+        chime_open_id = self._label_id(LABEL_CHIME_OPEN)
+        chime_close_id = self._label_id(LABEL_CHIME_CLOSE)
 
         labels = set(entry.labels)
 
@@ -269,6 +229,16 @@ class AlarmConfigurationManager:
             labels.add(trouble_id)
         else:
             labels.discard(trouble_id)
+
+        if self.chime_on_open:
+            labels.add(chime_open_id)
+        else:
+            labels.discard(chime_open_id)
+
+        if self.chime_on_close:
+            labels.add(chime_close_id)
+        else:
+            labels.discard(chime_close_id)
 
         registry.async_update_entity(self.selected_entity_id, labels=labels)
         self.status = f"Applied roles to {self.selected_entity_id}"

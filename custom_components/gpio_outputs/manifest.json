@@ -1,0 +1,12 @@
+{
+  "domain": "gpio_outputs",
+  "name": "GPIO Outputs",
+  "version": "0.2.0",
+  "documentation": "https://www.home-assistant.io/",
+  "requirements": [
+    "gpiod==2.5.0"
+  ],
+  "codeowners": [],
+  "iot_class": "local_push",
+  "config_flow": true
+}

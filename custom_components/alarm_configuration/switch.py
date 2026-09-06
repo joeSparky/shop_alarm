@@ -21,6 +21,8 @@ async def async_setup_entry(
         [
             AlarmConfigurationNotificationSwitch(manager),
             AlarmConfigurationTroubleSwitch(manager),
+            AlarmConfigurationChimeOnOpenSwitch(manager),
+            AlarmConfigurationChimeOnCloseSwitch(manager),
         ]
     )
 
@@ -74,3 +76,39 @@ class AlarmConfigurationTroubleSwitch(_ManagerSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         self.manager.set_system_trouble(False)
+
+
+class AlarmConfigurationChimeOnOpenSwitch(_ManagerSwitch):
+    """Stage the Chime on Open label."""
+
+    _attr_name = "Alarm Configuration Chime on Open"
+    _attr_unique_id = "alarm_configuration_chime_on_open"
+    _attr_icon = "mdi:bell-ring"
+
+    @property
+    def is_on(self) -> bool:
+        return self.manager.chime_on_open
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.manager.set_chime_on_open(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.manager.set_chime_on_open(False)
+
+
+class AlarmConfigurationChimeOnCloseSwitch(_ManagerSwitch):
+    """Stage the Chime on Close label."""
+
+    _attr_name = "Alarm Configuration Chime on Close"
+    _attr_unique_id = "alarm_configuration_chime_on_close"
+    _attr_icon = "mdi:bell-ring"
+
+    @property
+    def is_on(self) -> bool:
+        return self.manager.chime_on_close
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.manager.set_chime_on_close(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.manager.set_chime_on_close(False)

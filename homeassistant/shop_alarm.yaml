@@ -143,7 +143,7 @@ template:
           trouble_reason: >-
             {% set ns = namespace(reasons=[]) %}
             {% if is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on') %}
-              {% set ns.reasons = ns.reasons + ['Shop Siren Relay unavailable'] %}
+              {% set ns.reasons = ns.reasons + ['Siren Output unavailable'] %}
             {% endif %}
             {% if is_state('input_boolean.shop_alarm_test_security_sensor_unavailable', 'on') %}
               {% set ns.reasons = ns.reasons + ['TEST: security sensor unavailable'] %}
@@ -292,7 +292,7 @@ template:
           active_entities: >-
             {% set ns = namespace(entities=[]) %}
             {% if is_state('input_boolean.shop_alarm_test_siren_unavailable', 'on') %}
-              {% set ns.entities = ns.entities + ['switch.shop_siren_relay'] %}
+              {% set ns.entities = ns.entities + ['TEST: Siren Output unavailable'] %}
             {% endif %}
             {% if is_state('input_boolean.shop_alarm_test_security_sensor_unavailable', 'on') %}
               {% set ns.entities = ns.entities + ['TEST: security sensor'] %}
@@ -412,6 +412,17 @@ template:
             {% endfor %}
             {{ ns.entities | sort }}
 
+
+
+input_number:
+  shop_alarm_chime_tenths:
+    name: Chime Duration
+    min: 1
+    max: 50
+    step: 1
+    initial: 30
+    mode: box
+    icon: mdi:timer-outline
 
 input_text:
 
@@ -640,7 +651,10 @@ script:
       - action: switch.turn_off
         continue_on_error: true
         target:
-          entity_id: switch.shop_siren_relay
+          entity_id: >-
+            {{ label_entities('Siren Output')
+               | select('match', '^switch\\.')
+               | list }}
     mode: restart
 
   shop_alarm_acknowledge_notifications:
@@ -1005,7 +1019,10 @@ automation:
       - action: switch.turn_on
         continue_on_error: true
         target:
-          entity_id: switch.shop_siren_relay
+          entity_id: >-
+            {{ label_entities('Siren Output')
+               | select('match', '^switch\\.')
+               | list }}
       - action: script.shop_alarm_send_notification
         data:
           title: "ALARM"
@@ -1049,7 +1066,10 @@ automation:
       - action: switch.turn_on
         continue_on_error: true
         target:
-          entity_id: switch.shop_siren_relay
+          entity_id: >-
+            {{ label_entities('Siren Output')
+               | select('match', '^switch\\.')
+               | list }}
       - action: script.shop_alarm_send_notification
         data:
           title: "ALARM"
@@ -1161,6 +1181,54 @@ automation:
           entity_id:
             - input_boolean.shop_alarm_notifications_acknowledged
             - input_boolean.shop_alarm_notification_active
+    mode: restart
+
+
+  - id: shop_alarm_chime
+    alias: "Alarm - Chime"
+    description: "Pulse the switch labeled Chime Output when a Chime on Open or Chime on Close binary sensor changes state."
+    triggers:
+      # Listen globally so newly paired/labeled sensors require no YAML change.
+      - trigger: event
+        event_type: state_changed
+    conditions:
+      - condition: template
+        value_template: >-
+          {% set entity_id = trigger.event.data.entity_id | default('') %}
+          {% set old = trigger.event.data.old_state %}
+          {% set new = trigger.event.data.new_state %}
+          {% if not entity_id.startswith('binary_sensor.')
+                or old is none
+                or new is none %}
+            false
+          {% else %}
+            {% set entity_labels = labels(entity_id) %}
+            {{
+              (old.state != 'on'
+               and new.state == 'on'
+               and label_id('Chime on Open') in entity_labels)
+              or
+              (old.state == 'on'
+               and new.state != 'on'
+               and label_id('Chime on Close') in entity_labels)
+            }}
+          {% endif %}
+    actions:
+      - action: switch.turn_on
+        target:
+          entity_id: >-
+            {{ label_entities('Chime Output')
+               | select('match', '^switch\\.')
+               | list }}
+      - delay:
+          milliseconds: >-
+            {{ states('input_number.shop_alarm_chime_tenths') | int(30) * 100 }}
+      - action: switch.turn_off
+        target:
+          entity_id: >-
+            {{ label_entities('Chime Output')
+               | select('match', '^switch\\.')
+               | list }}
     mode: restart
 
 

@@ -1184,51 +1184,113 @@ automation:
     mode: restart
 
 
+  # Sole owner of Chime Output: a delay pattern takes priority over door
+  # chimes. Conditions reject door events during delays BEFORE restart, so
+  # those events cannot interrupt a pulse or reset the cadence.
   - id: shop_alarm_chime
     alias: "Alarm - Chime"
-    description: "Pulse the switch labeled Chime Output when a Chime on Open or Chime on Close binary sensor changes state."
+    description: "Coordinate door chimes and entry/exit delay buzzer patterns."
     triggers:
-      # Listen globally so newly paired/labeled sensors require no YAML change.
       - trigger: event
         event_type: state_changed
+        id: door
+      - trigger: state
+        entity_id: input_select.shop_alarm_state
+        # Match actual state changes, excluding attribute-only updates.
+        to: null
+        id: alarm_state
+      - trigger: homeassistant
+        event: start
+        id: startup
     conditions:
       - condition: template
         value_template: >-
-          {% set entity_id = trigger.event.data.entity_id | default('') %}
-          {% set old = trigger.event.data.old_state %}
-          {% set new = trigger.event.data.new_state %}
-          {% if not entity_id.startswith('binary_sensor.')
-                or old is none
-                or new is none %}
+          {% if trigger.id != 'door' %}
+            true
+          {% elif states('input_select.shop_alarm_state') in ['Exit Delay', 'Entry Delay'] %}
             false
           {% else %}
-            {% set entity_labels = labels(entity_id) %}
-            {{
-              (old.state != 'on'
-               and new.state == 'on'
-               and label_id('Chime on Open') in entity_labels)
-              or
-              (old.state == 'on'
-               and new.state != 'on'
-               and label_id('Chime on Close') in entity_labels)
-            }}
+            {% set entity_id = trigger.event.data.entity_id | default('') %}
+            {% set old = trigger.event.data.old_state %}
+            {% set new = trigger.event.data.new_state %}
+            {% if not entity_id.startswith('binary_sensor.')
+                  or old is none
+                  or new is none %}
+              false
+            {% else %}
+              {% set entity_labels = labels(entity_id) %}
+              {{
+                (old.state != 'on'
+                 and new.state == 'on'
+                 and label_id('Chime on Open') in entity_labels)
+                or
+                (old.state == 'on'
+                 and new.state != 'on'
+                 and label_id('Chime on Close') in entity_labels)
+              }}
+            {% endif %}
           {% endif %}
     actions:
-      - action: switch.turn_on
-        target:
-          entity_id: >-
-            {{ label_entities('Chime Output')
-               | select('match', '^switch\\.')
-               | list }}
-      - delay:
-          milliseconds: >-
-            {{ states('input_number.shop_alarm_chime_tenths') | int(30) * 100 }}
+      # Restart cancels any old ON/OFF wait before this cleanup. Every actual
+      # state transition silences the previous owner, including cancellation,
+      # disarm, fault, alarm and direct transitions between delay states.
       - action: switch.turn_off
         target:
           entity_id: >-
             {{ label_entities('Chime Output')
                | select('match', '^switch\\.')
                | list }}
+      - variables:
+          delay_state: "{{ states('input_select.shop_alarm_state') }}"
+          delay_started: "{{ as_timestamp(states.input_select.shop_alarm_state.last_changed) }}"
+      - choose:
+          - conditions: "{{ delay_state in ['Exit Delay', 'Entry Delay'] }}"
+            sequence:
+              - repeat:
+                  while:
+                    - condition: template
+                      value_template: "{{ is_state('input_select.shop_alarm_state', delay_state) }}"
+                  sequence:
+                    - action: switch.turn_on
+                      target:
+                        entity_id: >-
+                          {{ label_entities('Chime Output')
+                             | select('match', '^switch\\.')
+                             | list }}
+                    - delay:
+                        milliseconds: >-
+                          {{ states('input_number.shop_alarm_chime_tenths') | int(30) * 100 }}
+                    - action: switch.turn_off
+                      target:
+                        entity_id: >-
+                          {{ label_entities('Chime Output')
+                             | select('match', '^switch\\.')
+                             | list }}
+                    # OFF time is additional to the unchanged ON duration.
+                    # Use elapsed state time, never a pulse counter or a
+                    # separate 30-second timer, to choose the faster cadence.
+                    - delay:
+                        seconds: >-
+                          {% set fast = as_timestamp(now()) - (delay_started | float) >= 20 %}
+                          {{ (0.35 if fast else 1.85) if delay_state == 'Exit Delay'
+                             else (0.10 if fast else 0.85) }}
+          - conditions: "{{ trigger.id == 'door' }}"
+            sequence:
+              - action: switch.turn_on
+                target:
+                  entity_id: >-
+                    {{ label_entities('Chime Output')
+                       | select('match', '^switch\\.')
+                       | list }}
+              - delay:
+                  milliseconds: >-
+                    {{ states('input_number.shop_alarm_chime_tenths') | int(30) * 100 }}
+              - action: switch.turn_off
+                target:
+                  entity_id: >-
+                    {{ label_entities('Chime Output')
+                       | select('match', '^switch\\.')
+                       | list }}
     mode: restart
 
 

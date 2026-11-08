@@ -176,9 +176,11 @@ def test_unrelated_events_cannot_restart_chime():
 
 
 def test_chime_helper_and_single_output_owner():
+    # An initial value would override the saved duration on every restart.
+    assert 'initial' not in PACKAGE['input_number']['shop_alarm_chime_tenths']
     assert PACKAGE['input_number']['shop_alarm_chime_tenths'] == {
         'name': 'Chime Duration', 'min': 1, 'max': 50, 'step': 1,
-        'initial': 30, 'mode': 'box', 'icon': 'mdi:timer-outline',
+        'mode': 'box', 'icon': 'mdi:timer-outline',
     }
     # No second automation/script can issue a competing chime command.
     for automation in PACKAGE['automation']:

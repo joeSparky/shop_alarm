@@ -15,7 +15,8 @@ change alarm state; run them only against an explicitly selected test instance.
 The shared Chime Output controller gives entry/exit patterns priority over door
 chimes during delay states. Outside delays, Chime on Open/Close labels retain
 normal chime behavior. Each pulse uses the existing Chime Duration helper
-(in tenths of a second; the unchanged default is 30 = 3 seconds). OFF times are
+(in tenths of a second; for example, 30 = 3 seconds). With no `initial` value,
+Home Assistant restores the last selected duration after a restart. OFF times are
 additional to that pulse duration:
 
 | State | First 20 seconds | After 20 seconds |

@@ -624,8 +624,10 @@ def test_package_has_system_trouble_status_sensor_for_dashboard():
     assert "trouble_reason" in status_block
     assert "active_count:" in status_block
     assert "active_entities:" in status_block
-    assert "switch.shop_siren_relay" in status_block
-    assert "Shop Siren Relay unavailable" in text
+    # Supervision is label-based; no particular relay entity is required.
+    assert "label_id('Alarm System Trouble') in labels(entity.entity_id)" in status_block
+    assert "entity.state in ['unavailable', 'unknown']" in status_block
+    assert "Siren Output unavailable" in status_block
 
 
 # ---------------------------------------------------------------------------

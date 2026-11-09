@@ -1,0 +1,5 @@
+# Dependencies for offline YAML/template regression tests.
+pytest>=8
+requests>=2
+PyYAML>=6
+Jinja2>=3.1
